@@ -109,6 +109,12 @@ def check_sector_map(geo: dict) -> dict:
     pairs = sector_map(geo)
     size = int(geo.get("size") or 0)
     name = geo.get("name") or "микросхема"
+    if geo.get("why"):
+        hint = geo.get("notes") or geo.get("src") or ""
+        raise UnsupportedChip(
+            f"{name}: {geo['why']}"
+            + (f" Подробнее: {hint.rstrip('.')}." if hint else "")
+        )
     if not pairs or not size:
         hint = geo.get("notes") or geo.get("src") or ""
         raise UnsupportedChip(
@@ -166,6 +172,8 @@ WRONG_NAMES = {
                 "байтовое семейство Smart 5 - 28F004S5/28F008S5/28F016S5",
     "28F004SA": "у Intel нет 28F004SA: 4-Мбит байтовая - 28F004S5 (8 блоков по "
                 "64 КиБ), она же 28F004S3/SC",
+    "TC58FVT320": "у Toshiba нет TC58FVT320: 32-Мбит часть называется TC58FVT321 "
+                  "(4 МиБ, 63x64 КиБ + 8x8 КиБ, 3 В, команды AAAh/555h)",
     "M28F016S5": "у ST нет M28F016S5: байтовое семейство Smart 5 выпускала Intel "
                  "(28F016S5, 5 В, 32 x 64 КиБ)",
 }

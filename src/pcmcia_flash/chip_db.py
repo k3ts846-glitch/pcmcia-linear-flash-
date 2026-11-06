@@ -94,6 +94,7 @@ def _build_geometry(chips: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "sectors": [(int(size) * 1024, int(count))
                         for size, count in (chip.get("sectors") or [])],
             "notes": chip.get("notes", ""),
+            "why": chip.get("why", ""),
         }
     return geometry
 

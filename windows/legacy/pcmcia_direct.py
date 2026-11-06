@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.3"          # версия набора: печатается в отчёте и в --selftest
+KIT_VERSION = "2.17.4"          # версия набора: печатается в отчёте и в --selftest
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -2905,12 +2905,28 @@ GEOMETRY = {
                      size=64 << 10, volts=5, bypass=True, ambiguous=True,
                      src="Atmel AT29C512: страничная запись с автостиранием страницы, команды Sector Erase 30h нет - этим набором не стирается; 5-вольтовые JEDEC-микросхемы Atmel - семейство AT49F (AT49F040A)"),
     # --- Toshiba ---
-    "TC58FVT160": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=2 << 20, volts=5, bypass=True,
-                       src="Toshiba TC58FVT160: 2 MiB, 5 В (данные по умолчанию)"),
-    "TC58FVT320": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=4 << 20, volts=5, bypass=True,
-                       src="Toshiba TC58FVT320: 4 MiB, 5 В (данные по умолчанию)"),
+    # Даташит Toshiba TC58FVT160/B160A (16-MBIT, 2Mx8/1Mx16): «Block erase
+    # architecture 1 x 16 Kbytes / 2 x 8 Kbytes / 1 x 32 Kbytes / 31 x 64
+    # Kbytes», «TC58FVT160AFT: top boot block», VDD 2.7-3.6 В, BYTE/Word,
+    # коды 98h/00C2h. В байтовом режиме адреса команд - AAAh/555h (в даташите
+    # прямо: «Byte Mode: AAAH or 555H on address pins A10~A-1»), поэтому
+    # cmd=(0xAAA, 0x555), а не привычные 0x555/0x2AA.
+    # Порядок блоков в верхних 64 КиБ - из таблицы регионов ядра Linux
+    # (jedec_probe.c, TC58FVT160: 31 x 64K + 1 x 32K + 2 x 8K + 1 x 16K).
+    "TC58FVT160": dict(sector=64 << 10, page=1, cmd=(0xAAA, 0x555), wide=False,
+                       size=2 << 20, volts=3, bypass=True,
+                       sectors=[(64 << 10, 31), (32 << 10, 1), (8 << 10, 2), (16 << 10, 1)],
+                       src="Toshiba TC58FVT160: top boot, 31x64K + 32K + 2x8K + 16K, "
+                           "3.0 В, команды AAA/555 (даташит + ядро jedec_probe.c)"),
+    # TC58FVT321 (4 MiB): ядро jedec_probe.c - 63 x 64K + 8 x 8K; пресс-релиз
+    # Toshiba про TC58FVT/B321 - «one 64-Kbyte bank, one 448-Kbyte bank and
+    # seven 512-Kbyte banks», блоки boot 8 КБ x8. Имени TC58FVT320 в даташитах
+    # нет - оно осталось в WRONG_NAMES с подсказкой.
+    "TC58FVT321": dict(sector=64 << 10, page=1, cmd=(0xAAA, 0x555), wide=False,
+                       size=4 << 20, volts=3, bypass=True,
+                       sectors=[(64 << 10, 63), (8 << 10, 8)],
+                       src="Toshiba TC58FVT321: 63x64K + 8x8K, 3.0 В, команды AAA/555 "
+                           "(ядро jedec_probe.c + описание Toshiba TC58FVT/B321)"),
     # --- Samsung ---
     "K9F1G08U0A": dict(sector=128 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                        size=128 << 20, volts=3.3, bypass=False,
@@ -2973,9 +2989,14 @@ GEOMETRY = {
                      size=2 << 20, volts=5, protocol="intel",
                      src="Intel 28F016S5: байтовая Smart 5 FlashFile, CUI, "
                          "32 x 64 КиБ, 5 В; буфер не используется"),
+    # Ревизии 28F320 раскладываются по-разному: у B3T/B - boot-блоки, у J3/J5
+    # блоки крупнее 64 КиБ. Общее имя «28F320» ничего не говорит о границах
+    # стирания, а ошибка здесь стирает соседний блок (в 2.17.4 её ловит
+    # _erase_sector_guarded, но лучше не доводить).
     "28F320": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=True,
-                   size=4 << 20, volts=3, protocol="intel",
-                   src="Intel 28F320: CUI, 3 В"),
+                   size=4 << 20, volts=3, protocol="intel", ambiguous=True,
+                   src="Intel 28F320: укажите ревизию (B3T/B - boot-блоки, "
+                       "J3/J5 - блоки крупнее); общая раскладка не подтверждена"),
     # Обозначения M28F016S5 у ST не найдено: байтовое семейство FlashFile
     # выпускала Intel (28F004S5/008S5/016S5), у ST были M28F008/M28F016 (12 В)
     # и M28F102. Пока даташита нет - отказ, а не «как у Intel».
@@ -3034,14 +3055,27 @@ GEOMETRY = {
     "MBM29GL128": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
                        size=16 << 20, volts=3, bypass=True, strata=True,
                        src="Fujitsu MBM29GL128: StrataFlash, буфер 32 байта, 25h/D0h, 3 В"),
+    # Первое поколение Intel (12 В): стирание только ВСЕГО чипа
+    # («Bulk Erase» в каталоге Intel; у 28F020 в описании - «adds
+    # electrical chip-erasure»). Команды Sector Erase у этих
+    # микросхем нет, поэтому цикл «стереть сектор - записать» к ним
+    # неприменим.
     "28F256": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                   size=32 << 10, volts=12, src="Intel 28F256: 32 KiB, Vpp 12 В (устаревший)"),
+                   size=32 << 10, volts=12, ambiguous=True,
+                   why="стирание только целиком (bulk erase, 12 В), команды Sector Erase нет",
+                   src="Intel 28F256: 32 KiB, первое поколение, 12 В; в каталоге Intel помечена как Bulk Erase - поблочно не стирается"),
     "28F512": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                   size=64 << 10, volts=12, src="Intel 28F512: 64 KiB, Vpp 12 В (устаревший)"),
+                   size=64 << 10, volts=12, ambiguous=True,
+                   why="стирание только целиком (bulk erase, 12 В), команды Sector Erase нет",
+                   src="Intel 28F512: 64 KiB, первое поколение, 12 В; в каталоге Intel помечена как Bulk Erase - поблочно не стирается"),
     "28F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                   size=128 << 10, volts=12, src="Intel 28F010: 128 KiB, Vpp 12 В (устаревший)"),
+                   size=128 << 10, volts=12, ambiguous=True,
+                   why="стирание только целиком (bulk erase, 12 В), команды Sector Erase нет",
+                   src="Intel 28F010: 128 KiB, первое поколение, 12 В; в каталоге Intel помечена как Bulk Erase - поблочно не стирается"),
     "28F020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                   size=256 << 10, volts=12, src="Intel 28F020: 256 KiB, Vpp 12 В (устаревший)"),
+                   size=256 << 10, volts=12, ambiguous=True,
+                   why="стирание только целиком (bulk erase, 12 В), команды Sector Erase нет",
+                   src="Intel 28F020: 256 KiB, первое поколение, 12 В; в каталоге Intel помечена как Bulk Erase - поблочно не стирается"),
     # ====================================================================
     # Производители Hitachi, Mitsubishi, NEC, Sharp и др.
     # Параметры указаны по даташитам, где известны; иначе — безопасные
@@ -3136,6 +3170,12 @@ def check_sector_map(geo, strict=False):
                 str(total) + " байт, а ёмкость " + str(size) + " - данные "
                 "противоречат друг другу, работать нельзя.")
         return geo
+    if geo.get("ambiguous") and geo.get("why"):
+        # Отказ не из-за ревизии, а из-за того, что микросхема вообще не умеет
+        # то, на чём построен наш цикл (например, стирание только целиком).
+        hint = geo.get("src") or geo.get("notes") or ""
+        raise DirectError("микросхема " + str(name) + ": " + str(geo["why"])
+                          + ((" Подробнее: " + hint.rstrip(".") + ".") if hint else ""))
     if geo.get("ambiguous"):
         hint = geo.get("src") or geo.get("notes") or ""
         raise DirectError(
@@ -3191,6 +3231,8 @@ WRONG_NAMES = {
                 "байтовое семейство Smart 5 - 28F004S5/28F008S5/28F016S5",
     "28F004SA": "у Intel нет 28F004SA: 4-Мбит байтовая - 28F004S5 (8 блоков по "
                 "64 КиБ), она же 28F004S3/SC",
+    "TC58FVT320": "у Toshiba нет TC58FVT320: 32-Мбит часть называется TC58FVT321 "
+                  "(4 МиБ, 63x64 КиБ + 8x8 КиБ, 3 В, команды AAAh/555h)",
     "M28F016S5": "у ST нет M28F016S5: байтовое семейство Smart 5 выпускала Intel "
                  "(28F016S5, 5 В, 32 x 64 КиБ)",
 }
@@ -4817,6 +4859,47 @@ def writes_for_bypass(plan):
     return any(bool(writes) for _, _, writes in plan)
 
 
+def _erase_sector_guarded(flash, off):
+    """Стереть сектор и убедиться, что байты ЗА ЕГО ГРАНИЦАМИ не изменились.
+
+    Зачем: ошибка в таблице микросхем («сектор 64 КиБ» там, где на железе
+    128 КиБ) по самому сектору не видна — он-то сотрётся. Видна она по соседу:
+    если байт за границей сектора был не 0xFF и стал 0xFF, значит стёрся блок
+    БОЛЬШЕ заявленного, и соседние данные потеряны. Проверять это надо ДО
+    записи: тогда отказ честный, а не «записалось, но сосед испорчен».
+
+    Соседа два: последний байт слева и первый справа. Соседей, которые уже
+    0xFF, не проверяем — по ним ничего не видно.
+    """
+    start, size = flash.span(off)
+    probes = {}
+    for probe in (start - 1, start + size):
+        if probe < 0 or probe == off:
+            continue
+        try:
+            b = flash.read(probe, 1)[0]
+        except (DirectError, OSError, ValueError):
+            continue                      # за пределами карты — проверять нечего
+        if b != 0xFF:
+            probes[probe] = b
+    ok, why = flash.erase_sector(off)
+    if not ok:
+        return ok, why
+    for probe, was in probes.items():
+        try:
+            now = flash.read(probe, 1)[0]
+        except (DirectError, OSError, ValueError):
+            continue
+        if now != was:
+            return False, (
+                f"стёрся блок БОЛЬШЕ, чем записано в таблице: байт {probe:#x} "
+                f"за границей сектора {start:#x}+{size:#x} был {was:#04x}, "
+                f"стал {now:#04x}. Модель микросхемы неверна (у настоящей блок "
+                f"длиннее) — стирание остановлено, чтобы не потерять остальное. "
+                f"Проверьте имя в --chip и размер сектора в --sector")
+    return True, ""
+
+
 def flash_write_image(flash, image, progress=None, verify=True,
                       erase_first=False, journal=None, resume=False,
                       remote_dir=None, backup_dir=None):
@@ -4897,7 +4980,7 @@ def flash_write_image(flash, image, progress=None, verify=True,
                               f"{off:#x}: {error}")
                 return res
         if need_erase:
-            ok, why = flash.erase_sector(off)
+            ok, why = _erase_sector_guarded(flash, off)
             if not ok:
                 res["failed_at"] = off
                 res["why"] = f"стирание сектора {off:#x}: {why}"
@@ -4916,7 +4999,7 @@ def flash_write_image(flash, image, progress=None, verify=True,
                               f"Сектор изношен или защищён.")
                 return res
         elif erase_first:
-            ok, why = flash.erase_sector(off)
+            ok, why = _erase_sector_guarded(flash, off)
             if not ok:
                 res["failed_at"] = off
                 res["why"] = f"стирание сектора {off:#x}: {why}"

@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.join(KIT, "src"))
 sys.path.insert(0, os.path.join(KIT, "tests"))
 
 import nor_model as NM                                              # noqa: E402
+from pcmcia_flash import image as _image                            # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -560,6 +561,94 @@ check("SST39VF040: стирается один 4-КиБ сектор, сосед
       ok and flash.read(3 * flash.sector, 16) == b"\xff" * 16
       and flash.read(2 * flash.sector, 8) == img[2 * flash.sector:2 * flash.sector + 8],
       why)
+
+
+# --- 10. Страж соседей: блок на железе больше, чем в таблице --------------
+# Ровно тот случай, который дал аудит 2.17.3 (SST: 64 КиБ в таблице против
+# 4 КиБ на железе, и наоборот - таблица 64 КиБ против блока 128 КиБ). Сам
+# сектор стирается в любом случае, поэтому ошибку видно только по СОСЕДУ.
+section("страж соседей при стирании (блок больше, чем в таблице)")
+
+IMG2 = bytes((i * 13 + 7) & 0xFF for i in range(2 << 20))
+
+for where, erase in (("монолит", D._erase_sector_guarded),
+                     ("пакет", _image._erase_sector_guarded)):
+    card, _bus, flash = NM.make(kit=KIT, chips=1, chip_name="Am29F016", blank=False)
+    card.mem[0][:] = IMG2
+    ok, why = erase(flash, 0x8000)
+    check("%s: верная геометрия — страж молчит" % where, ok, why)
+
+    card, _bus, flash = NM.make(kit=KIT, chips=1, chip_name="Am29F016", blank=False)
+    card.mem[0][:] = IMG2
+    flash.sector = 32 << 10          # таблица думает 32 КиБ, железо сотрёт 64
+    flash.sector_map = None
+    ok, why = erase(flash, 0x8000)
+    check("%s: заниженный сектор — отказ, сосед назван" % where,
+          (not ok) and "БОЛЬШЕ" in why and "0x7fff" in why, why[:60])
+
+
+# --- 11. Второй заход аудита: Toshiba boot-блоки, старое 12-вольтовое -------
+# Toshiba TC58FVT160/B160A (даташит): «Block erase architecture 1 x 16 Kbytes /
+# 2 x 8 Kbytes / 1 x 32 Kbytes / 31 x 64 Kbytes», top boot, VDD 2.7-3.6 В,
+# коды 98h/00C2h, в байтовом режиме адреса команд AAAh/555h. Порядок блоков в
+# верхних 64 КиБ - из таблицы регионов ядра jedec_probe.c. Прежние «2 МиБ по
+# 64 КиБ и 5 В» были неверны и на boot-чипе задели бы 32K+8K+8K+16K.
+section("Toshiba и старое 12-вольтовое (второй заход аудита)")
+
+TOSH = {"TC58FVT160": (2 << 20, [(65536, 31), (32768, 1), (8192, 2), (16384, 1)]),
+        "TC58FVT321": (4 << 20, [(65536, 63), (8192, 8)])}
+bad = []
+for name, (size, want) in TOSH.items():
+    for where, table in (("пакет", C.CHIP_GEOMETRY), ("монолит", D.GEOMETRY)):
+        geo = table.get(name)
+        if not geo:
+            bad.append("%s нет в %s" % (name, where))
+            continue
+        if C.sector_map(geo) != want or geo["size"] != size:
+            bad.append("%s/%s: %s" % (name, where, C.sector_map(geo)))
+        if geo.get("volts") != 3 or tuple(geo["cmd"]) != (0xAAA, 0x555):
+            bad.append("%s/%s: %s В, cmd %s" % (name, where, geo.get("volts"), geo["cmd"]))
+        if geo.get("wide"):
+            bad.append("%s/%s: широкая команда у байтовой" % (name, where))
+check("TC58FVT160/321: boot-карты, 3 В, команды AAA/555 в обеих таблицах",
+      not bad, str(bad[:3]))
+
+try:
+    D.geometry_for("TC58FVT320")
+    no320 = False
+except D.DirectError as exc:
+    no320 = "TC58FVT321" in str(exc)
+check("TC58FVT320: отказ с подсказкой TC58FVT321", no320)
+
+# Первое поколение Intel: стирание только целиком (Bulk Erase), команды
+# Sector Erase нет — цикл «стереть сектор, записать» неприменим.
+bad = []
+for name in ("28F010", "28F020", "28F256", "28F512"):
+    try:
+        D.check_sector_map(D.geometry_for(name))
+        bad.append("%s: не отказал" % name)
+    except D.DirectError as exc:
+        if "bulk erase" not in str(exc):
+            bad.append("%s: %s" % (name, str(exc)[:40]))
+check("28F010/020/256/512 (12 В, bulk erase): отказ с объяснением", not bad,
+      str(bad[:2]))
+
+# «28F320» без ревизии: у B3T/B boot-блоки, у J3/J5 блоки крупнее — гадать нельзя.
+try:
+    D.check_sector_map(D.geometry_for("28F320"))
+    no320 = False
+except D.DirectError as exc:
+    no320 = "ревизию" in str(exc)
+check("28F320 без ревизии: отказ «укажите ревизию»", no320)
+
+# Списки напряжений не должны содержать сами себя (такая строка однажды
+# попала в chips.json правкой списка).
+raw = _json.loads((pathlib.Path(KIT) / "src" / "pcmcia_flash" / "data" /
+                   "chips.json").read_text(encoding="utf-8"))
+junk = [(key, [x for x in raw.get(key, []) if x in ("vpp5", "vpp126")])
+        for key in ("vpp5", "vpp126")]
+junk = [(k, v) for k, v in junk if v]
+check("vpp5/vpp126 не содержат собственных имён", not junk, str(junk))
 
 
 # Две реализации должны говорить об одном и том же: пакет и монолит -

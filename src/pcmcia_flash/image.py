@@ -711,6 +711,43 @@ def flash_probe_safe(flash, offset=0, backup_dir=None, progress=None):
             "backup": path, "restored": True}
 
 
+def _erase_sector_guarded(flash, off):
+    """Стереть сектор и проверить, что байты за его границами не изменились.
+
+    Ошибка в таблице микросхем («сектор 64 КиБ» там, где на железе 128 КиБ)
+    по самому сектору не видна: он сотрётся в любом случае. Видна она по
+    соседу — если байт за границей сектора был не 0xFF и стал 0xFF, стёрся
+    блок БОЛЬШЕ заявленного. Проверка идёт до записи, поэтому отказ честный.
+    """
+    start, size = flash.span(off)[:2]
+    probes = {}
+    for probe in (start - 1, start + size):
+        if probe < 0 or probe == off:
+            continue
+        try:
+            byte = flash.read(probe, 1)[0]
+        except (DirectError, OSError, ValueError):
+            continue
+        if byte != 0xFF:
+            probes[probe] = byte
+    ok, why = flash.erase_sector(off)
+    if not ok:
+        return ok, why
+    for probe, was in probes.items():
+        try:
+            now = flash.read(probe, 1)[0]
+        except (DirectError, OSError, ValueError):
+            continue
+        if now != was:
+            return False, (
+                f"стёрся блок БОЛЬШЕ, чем записано в таблице: байт {probe:#x} "
+                f"за границей сектора {start:#x}+{size:#x} был {was:#04x}, "
+                f"стал {now:#04x}. Модель микросхемы неверна (у настоящей блок "
+                f"длиннее) — стирание остановлено, чтобы не потерять остальное. "
+                f"Проверьте имя в --chip и размер сектора в --sector")
+    return True, ""
+
+
 def flash_write_image(flash, image, progress=None, verify=True,
                       erase_first=False, journal=None, resume=False,
                       remote_dir=None, backup_dir=None):
@@ -767,7 +804,7 @@ def flash_write_image(flash, image, progress=None, verify=True,
                               f"{off:#x}: {error}")
                 return res
         if need_erase:
-            ok, why = flash.erase_sector(off)
+            ok, why = _erase_sector_guarded(flash, off)
             if not ok:
                 res["failed_at"] = off
                 res["why"] = f"стирание сектора {off:#x}: {why}"
@@ -784,7 +821,7 @@ def flash_write_image(flash, image, progress=None, verify=True,
                               f"Сектор изношен или защищён.")
                 return res
         elif erase_first:
-            ok, why = flash.erase_sector(off)
+            ok, why = _erase_sector_guarded(flash, off)
             if not ok:
                 res["failed_at"] = off
                 res["why"] = f"стирание сектора {off:#x}: {why}"

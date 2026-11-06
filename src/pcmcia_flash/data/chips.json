@@ -1,5 +1,5 @@
 {
-  "_comment": "База микросхем PCMCIA linear flash. Данные сведены с даташитов AMD, Fujitsu, Intel и flashrom/Linux kernel jedec_probe.c. Редактировать этот файл, а не chips.py.",
+  "_comment": "База микросхем PCMCIA linear flash. Данные сведены с даташитов AMD, Fujitsu, Intel и flashrom/Linux kernel jedec_probe.c. Редактировать этот файл, а не chips.py. Размеры: size_kib и sector_kib - в КиБ, неоднородная карта sectors - тоже в КиБ ([размер, число]).",
   "manufacturers": {
     "1": "AMD",
     "4": "Fujitsu",
@@ -928,9 +928,42 @@
       "volts": 5,
       "manuf": "STMicroelectronics",
       "notes": "4 Mbit, bottom-boot: 11 блоков = 16K + 2x8K + 32K + 7x64K; код 00D6h при вендоре 0020h"
-    }  },
+    },
+    "TC58FVT160": {
+      "jedec_id": null,
+      "cmd_addr1": "0xaaa",
+      "cmd_addr2": "0x555",
+      "wide": false,
+      "page": null,
+      "bypass": true,
+      "strata": false,
+      "protocol": "jedec",
+      "volts": 3,
+      "manuf": "Toshiba",
+      "size_kib": 2048,
+      "sector_kib": 64,
+      "sectors": [[64, 31], [32, 1], [8, 2], [16, 1]],
+      "notes": "16 Mbit, top boot: 31x64 КиБ + 32 + 2x8 + 16, 3.0 В. В байтовом режиме адреса команд AAAh/555h (даташит Toshiba TC58FVT160/B160A, коды 98h/00C2h)"
+    },
+    "TC58FVT321": {
+      "jedec_id": null,
+      "cmd_addr1": "0xaaa",
+      "cmd_addr2": "0x555",
+      "wide": false,
+      "page": null,
+      "bypass": true,
+      "strata": false,
+      "protocol": "jedec",
+      "volts": 3,
+      "manuf": "Toshiba",
+      "size_kib": 4096,
+      "sector_kib": 64,
+      "sectors": [[64, 63], [8, 8]],
+      "notes": "32 Mbit, 63x64 КиБ + 8x8, 3.0 В, команды AAAh/555h (ядро jedec_probe.c: TC58FVT321 0x009A; описание Toshiba TC58FVT/B321)"
+    }
+  },
   "vpp5": [
-    "vpp5", "Am29F016", "Am29F800BB", "Am29F400AB", "Am29F040", "Am29F200AB",
+    "Am29F016", "Am29F800BB", "Am29F400AB", "Am29F040", "Am29F200AB",
     "Am29F010", "Am29F032B", "Am29F080", "Am29F080B", "Am29F017D", "Am29F200AT",
     "Am29F400AT", "Am29F800BT", "Am29LV016", "Am29LV001BB", "Am29LV001BT", "Am29LV040B",
     "Am29LV400BB", "Am29LV400BT", "Am29LV800BB", "Am29LV800BT", "Am29LV160DT", "Am29LV160DB",
@@ -943,7 +976,7 @@
     "SST39VF080", "TC58FVT160", "TC58FVT320", "28F004S5", "28F008S5", "28F016S5"
   ],
   "vpp126": [
-    "vpp126", "Am28F256", "Am28F512", "Am28F010", "Am28F020", "28F256",
+    "Am28F256", "Am28F512", "Am28F010", "Am28F020", "28F256",
     "28F512", "28F010", "28F020", "D28F010", "D28F020", "LH28F010",
     "LH28F020", "M28F008", "M28F016", "M28F102", "28F008SA", "28F016SA"
   ]
