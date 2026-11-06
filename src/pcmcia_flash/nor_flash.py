@@ -23,8 +23,8 @@ from .constants import (
     NOR_BYPASS, NOR_CMD_ADDR1, NOR_CMD_ADDR2, NOR_ERASE_CHIP, NOR_ERASE_RESUME,
     NOR_ERASE_SECTOR, NOR_ERASE_SETUP, NOR_ERASE_SUSPEND, NOR_PROGRAM, NOR_RESET,
     NOR_SECTOR_PROTECT,
-    NOR_UNLOCK1, NOR_UNLOCK2, SR_ERASE_FAIL, SR_PROTECT, SR_READY, SR_VPP_LOW,
-    SR_WRITE_FAIL,
+    NOR_UNLOCK1, NOR_UNLOCK2, SR_ERASE_FAIL, SR_PROTECT, SR_READY, SR_SUSPEND,
+    SR_VPP_LOW, SR_WRITE_FAIL,
     SECTOR,
 )
 from .errors import DirectError
@@ -333,10 +333,16 @@ class NorFlashStatus:
 
         Возвращает True если команда принята, False если не поддерживается.
         """
+        if self.protocol == "intel":
+            # У Intel приостановка ЕСТЬ: Erase Suspend B0h (таблица 3
+            # даташита 290429-008). Прежний комментарий «у Intel 28F
+            # приостановки нет» был неверен, а сама команда B0h лежала в
+            # константах неиспользованной.
+            for chip in range(self.chips):
+                self._intel_send(chip, INTEL_CUI_SUSPEND)
+            self._erase_suspended = True
+            return True
         if self.protocol != "jedec":
-            # B0h/30h - команды JEDEC-набора AMD/Fujitsu; у Intel 28F
-            # приостановки стирания нет. К Unlock Bypass (20h) это отношения
-            # не имеет: прежнее условие «только при bypass» было неверным.
             return False
         self._send(self.cmd1, NOR_ERASE_SUSPEND)
         self._erase_suspended = True
@@ -347,6 +353,12 @@ class NorFlashStatus:
 
         Возвращает True если команда принята.
         """
+        if self.protocol == "intel":
+            # Erase Resume - D0h, та же команда, что Erase Confirm.
+            for chip in range(self.chips):
+                self._intel_send(chip, INTEL_CUI_ERASE_CONFIRM)
+            self._erase_suspended = False
+            return True
         if self.protocol != "jedec":
             return False
         self._send(self.cmd1, NOR_ERASE_RESUME)
@@ -357,10 +369,11 @@ class NorFlashStatus:
         """Intel: сброс статусного регистра (биты 3,4,5 ставятся навсегда)."""
         if self.protocol != "intel":
             return
+        # По байту на чип (см. _intel_send): прежняя запись «50h дважды
+        # в один чип» на карте с одним чипом давала команду + данные.
         for chip in range(self.chips):
             try:
-                self.bus.wr_many(chip_abs(0, chip, self.chips),
-                                 bytes([INTEL_CUI_CLEAR_SR, INTEL_CUI_CLEAR_SR]))
+                self._intel_send(chip, INTEL_CUI_CLEAR_SR)
             except (DirectError, OSError, ValueError):
                 pass
 
@@ -369,9 +382,24 @@ class NorFlashStatus:
         if self.protocol != "intel":
             return self.read_byte(card_off)
         chip = chip_of(card_off, self.chips)
-        self.bus.wr_many(chip_abs(0, chip, self.chips),
-                         bytes([INTEL_CUI_READ_SR, INTEL_CUI_READ_SR]))
+        self._intel_send(chip, INTEL_CUI_READ_SR)
         return self.read_byte(card_off)
+
+    def _clear_status_and_reset(self, card_off):
+        """Очистить статус (50h) и вернуть чип в режим массива (FFh).
+
+        Даташит 28F008SA 290429-008, §4.4: биты SR.3/4/5 ставятся автоматом
+        (WSM) и снимаются ТОЛЬКО командой Clear Status Register (50h). FFh -
+        это Read Array/Reset, он их не трогает. Без 50h первая же ошибка Vpp
+        остаётся в регистре, и каждая следующая запись/стирание сразу получает
+        тот же отказ: карта выглядит мёртвой до передёргивания питания.
+        """
+        chip = chip_of(card_off, self.chips)
+        try:
+            self._intel_send(chip, INTEL_CUI_CLEAR_SR)
+        except (DirectError, OSError, ValueError):
+            pass
+        self._intel_send(chip, INTEL_CUI_RESET)
 
     def _status_ok(self, card_off, want_value=None):
         """(готово, объяснение отказа) для текущей операции.
@@ -387,22 +415,27 @@ class NorFlashStatus:
             return st, ""                      # ещё идёт
         if st & SR_PROTECT:
             # Отказ оставляет CUI в режиме статуса: дальше чтение массива
-            # вернуло бы байт статуса. Возвращаем чип в режим массива (FFh).
-            self._intel_send(chip_of(card_off, self.chips), INTEL_CUI_RESET)
+            # вернуло бы байт статуса. Чистим статус (50h) и возвращаем чип в
+            # режим массива (FFh).
+            self._clear_status_and_reset(card_off)
             return st, ("блок защищён (WPPS=1, block lock). У 28F004S5/008S5/016S5 снять "
                         "программную защиту нельзя: Intel прошивает master "
                         "lock-bit на заводе (erratum #2, 297796-007), нужны "
                         "12 В на RP#, а слот их не даёт")
         if st & SR_VPP_LOW:
-            self._intel_send(chip_of(card_off, self.chips), INTEL_CUI_RESET)
+            self._clear_status_and_reset(card_off)
             return st, ("нет напряжения программирования (VPPS=1): этой "
-                        "микросхеме нужны 12 В на Vpp, а слот их не даёт")
+                        "микросхеме нужны 12 В на Vpp, а слот их не даёт; "
+                        "статус очищен (50h), чтобы следующая попытка не "
+                        "получила тот же застарелый бит")
         if st & SR_ERASE_FAIL:
-            self._intel_send(chip_of(card_off, self.chips), INTEL_CUI_RESET)
-            return st, "микросхема сообщает: стирание не удалось (ESS=1)"
+            self._clear_status_and_reset(card_off)
+            return st, ("микросхема сообщает: стирание не удалось (ESS=1); "
+                        "статус очищен (50h)")
         if st & SR_WRITE_FAIL:
-            self._intel_send(chip_of(card_off, self.chips), INTEL_CUI_RESET)
-            return st, "микросхема сообщает: запись не удалась (BWS=1)"
+            self._clear_status_and_reset(card_off)
+            return st, ("микросхема сообщает: запись не удалась (BWS=1); "
+                        "статус очищен (50h)")
         return st, ""
 
     def read_id(self):
@@ -821,6 +854,12 @@ class NorFlashProgramming:
                 st, why = self._status_ok(addr)
                 if why:
                     return False, f"чип {chip}, блок {base:#x}: {why}"
+                if st & SR_SUSPEND:
+                    # WSMS=1 при приостановке тоже, но блок не стёрт: без
+                    # этой проверки «пауза» выглядела бы успешным стиранием.
+                    return False, (f"чип {chip}, блок {base:#x}: стирание "
+                                   "приостановлено (SR.6=1) — сначала Erase "
+                                   "Resume (D0h), потом повторить")
                 if st & SR_READY:
                     break
             else:

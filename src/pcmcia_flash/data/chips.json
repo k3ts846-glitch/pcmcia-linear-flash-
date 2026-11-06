@@ -827,16 +827,16 @@
       "jedec_id": "0xA2",
       "size_kib": 1024,
       "sector_kib": 64,
-      "cmd_addr1": "0x5555",
-      "cmd_addr2": "0x2aaa",
-      "wide": true,
+      "cmd_addr1": "0x0",
+      "cmd_addr2": "0x0",
+      "wide": false,
       "page": null,
       "bypass": false,
       "strata": false,
       "protocol": "intel",
       "volts": 12,
       "manuf": "Intel",
-      "notes": "8 Mbit, CUI, Vpp 12V"
+      "notes": "8 Мбит x8, CUI + статус 70h, 16 x 64 КиБ, Vpp 12 В (290429-008); команда байтом"
     },
     "28F008S5": {
       "jedec_id": "0xA6",

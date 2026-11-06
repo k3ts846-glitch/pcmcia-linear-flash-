@@ -1295,6 +1295,96 @@ pkg = (pathlib.Path(KIT) / "src" / "pcmcia_flash" / "nor_flash.py").read_text(en
 check("пакетный двойник знает про ro (предохранитель в обеих реализациях)",
       "self.ro = bool(ro)" in pkg and "def _readonly" in pkg)
 
+# --- 19. Даташит Intel 28F008SA (290429-008) -------------------------------
+# Документ (8 Мбит, декабрь 1998) даёт три вещи, которых в наборе не было:
+# * статусный регистр: SR.7 готовность, SR.6 ПАУЗА стирания, SR.5 ошибка
+#   стирания, SR.4 ошибка записи, SR.3 нет Vpp, SR.2-SR.0 reserved;
+# * биты SR.3/4/5 ставятся автоматом и снимаются ТОЛЬКО командой 50h
+#   (Clear Status Register): FFh - это Read Array/Reset, их не трогает.
+#   «Если SR.3 выставлен, его надо сбросить, прежде чем снова писать/стирать»;
+# * пауза стирания у Intel ЕСТЬ: Erase Suspend B0h, Erase Resume D0h.
+from pcmcia_flash import constants as _CONST      # noqa: E402  (та же таблица)
+check("SR.6 (пауза стирания) есть в обеих реализациях",
+      D.SR_SUSPEND == 0x40 and _CONST.SR_SUSPEND == 0x40,
+      (D.SR_SUSPEND, getattr(_CONST, "SR_SUSPEND", None)))
+
+geo_sa = D.GEOMETRY.get("28F008SA") or {}
+bad = []
+if geo_sa.get("wide"):
+    bad.append("wide=True: чип байтовый (x8, Byte Write)")
+if tuple(geo_sa.get("cmd") or ()) != (0, 0):
+    bad.append("cmd %s" % (geo_sa.get("cmd"),))
+if geo_sa.get("sector") != 64 << 10 or geo_sa.get("size") != 1 << 20:
+    bad.append("16 x 64 КиБ")
+if geo_sa.get("volts") != 12:
+    bad.append("volts %s" % geo_sa.get("volts"))
+src_sa = str(geo_sa.get("src") or "")
+miss = [n for n in ("290429", "A2h", "x8") if n not in src_sa]
+if miss:
+    bad.append("в источнике нет %s" % (miss,))
+check("28F008SA: байтовый (wide=False), cmd (0,0), 16 x 64 КиБ, 12 В, 290429-008",
+      not bad, str(bad[:3]))
+
+# 50h идёт ПОСЛЕ отказа и ДО возврата в режим массива (FFh). Без неё карта
+# после первой же ошибки Vpp отвечала бы тем же битом до передёргивания питания.
+card_sa, _bus_sa, flash_sa = NM.make(kit=KIT, chips=1, chip_name="28F008SA",
+                                     blank=True, no_vpp=True)
+log = []
+_many = card_sa.write_many
+
+
+def _spy(addr, data):
+    log.append(bytes(data))
+    return _many(addr, data)
+
+
+card_sa.write_many = _spy
+ok_novpp, why_novpp = flash_sa.erase_sector(0)
+seq = [b[0] for b in log if len(b) == 1]
+i_d0 = seq.index(0xD0) if 0xD0 in seq else -1
+i_50 = seq.index(0x50) if 0x50 in seq else -1
+i_ff = seq.index(0xFF) if 0xFF in seq else -1
+check("нет Vpp: отказ по SR.3 с объяснением про 12 В",
+      not ok_novpp and "Vpp" in why_novpp, why_novpp[:70])
+check("после отказа послан 50h (Clear Status) и уже потом FFh",
+      i_50 > i_d0 >= 0 and i_ff > i_50, (i_d0, i_50, i_ff))
+
+# ... и без ошибки Vpp тот же блок стирается штатно
+card_ok, _bus_ok, flash_ok = NM.make(kit=KIT, chips=1, chip_name="28F008SA",
+                                     blank=True)
+ok_e, why_e = flash_ok.erase_sector(0)
+check("28F008SA: штатное стирание блока работает",
+      ok_e and card_ok.erases == 1 and flash_ok.read_byte(0) == 0xFF,
+      (why_e[:60], card_ok.erases))
+
+# Пауза стирания: у Intel это B0h/D0h (таблица 3), а не отказ.
+check("Intel: пауза стирания (B0h) принимается", flash_ok.erase_suspend() is True)
+check("Intel: продолжение стирания (D0h) принимается", flash_ok.erase_resume() is True)
+
+
+class _SuspendedFlash(D.NorFlash):
+    """Чип, который всё время отвечает «стирание приостановлено»."""
+
+    def read_status(self, card_off=0):
+        return D.SR_READY | D.SR_SUSPEND
+
+
+susp = _SuspendedFlash(_SilentBus(), chips=1, sector=64 << 10, name="тест",
+                       protocol="intel")
+ok_s, why_s = susp.erase_sector(0)
+check("SR.6: приостановленное стирание не выдаётся за готовое",
+      not ok_s and "приостановлено" in why_s and "D0h" in why_s, why_s[:80])
+
+for path in ("windows/legacy/pcmcia_direct.py", "src/pcmcia_flash/nor_flash.py"):
+    src = (pathlib.Path(KIT) / path).read_text(encoding="utf-8")
+    if not ("def _clear_status_and_reset" in src
+            and "INTEL_CUI_CLEAR_SR" in src
+            and "SR_SUSPEND" in src):
+        check("50h/SR.6 в " + path, False, "нет _clear_status_and_reset/50h/SR.6")
+    else:
+        check("50h и SR.6 в " + path.split("/")[-1], True)
+
+
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)
 print("ИТОГО: прошло %d, провалено %d" % (len(PASS), len(FAIL)))
