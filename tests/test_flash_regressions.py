@@ -268,6 +268,83 @@ fake = FakeNor(data)
 check("src verify_geometry: без известной ёмкости проверка пропускается",
       C.verify_geometry(fake, {"sector": 4096, "size": 0})[0])
 
+# --- 6. Пульт: имена файлов, таймауты, JSON-режим ----------------------------
+section("пульт: файлы для ноутбука, таймауты ssh, машинный вывод")
+
+from pcmcia_kit import config as KCFG                               # noqa: E402
+
+missing = [name for name in KCFG.REMOTE_FILES
+           if not os.path.exists(os.path.join(KIT, name))]
+check("REMOTE_FILES: все перечисленные файлы существуют", not missing,
+      str(missing))
+check("REMOTE_FILES: planb.py уезжает на ноутбук (его запускает run_remote.py)",
+      "planb.py" in KCFG.REMOTE_FILES)
+
+from pcmcia_kit import transport as KTR                             # noqa: E402
+
+calls = {}
+
+
+class _FakeProc:
+    returncode = 0
+    stdout = "ok\n"
+    stderr = ""
+
+
+def _fake_run(argv, **kw):
+    calls.update(kw)
+    return _FakeProc()
+
+
+real_run = KTR.subprocess.run
+KTR.subprocess.run = _fake_run
+try:
+    target = KTR.Target("example.invalid")
+    target.run("echo hi", timeout=42)
+finally:
+    KTR.subprocess.run = real_run
+check("transport.run действительно передаёт timeout в subprocess",
+      calls.get("timeout") == 42, str(calls.get("timeout")))
+
+# JSON-режим: в stdout не должно быть человеческого текста
+import subprocess                                                   # noqa: E402
+res = subprocess.run([sys.executable, os.path.join(KIT, "pcmcia_ctl.py"),
+                      "info", "--json"], capture_output=True, text=True,
+                     timeout=120)
+# Режим --json по замыслу набора печатает и отчёт для человека, и строку
+# "JSON {...}". Ломаться он не должен только в одном случае - когда работать
+# не с чем: тогда без этой проверки в stdout была одна проза про sudo, и
+# разбирать было нечего.
+json_lines = [ln for ln in res.stdout.splitlines() if ln.startswith("JSON ")]
+check("pcmcia_ctl --json: строка JSON есть даже когда нет прав/карты",
+      bool(json_lines), res.stdout.strip()[:120])
+
+# --- 7. Мелочи, которые легко превращаются в зависание ------------------------
+section("циклы и границы")
+
+check("sector_table считает по ёмкости КАРТЫ (4 МиБ пара, а не 2 МиБ чип)",
+      len(C.sector_table({"sector": 64 << 10, "size": 2 << 20}, 4 << 20)) == 64)
+
+
+class TinyBus(NM.load_direct(KIT).NorBus):
+    """Шина, у которой окно не двигается: так выглядит «адрес вне карты»."""
+
+    def ensure(self, card_off, n=1):
+        if self._len == 0:
+            self._base, self._len, self._off = 0, 1, 0
+            self._m = bytearray(b"\xff" * 8)
+
+
+card, bus, flash = NM.make(kit=KIT, chips=1, chip_name="Am29F016")
+tiny = TinyBus(card, card.exca, {"start": card.pci_base,
+                                 "size": card.win_size}, span=4096, limit=1 << 20)
+try:
+    tiny.rd_block(0, 4)
+    hung = False
+except Exception as exc:                                  # noqa: BLE001
+    hung = "за пределами карты" in str(exc)
+check("rd_block: оконная нестыковка даёт ошибку, а не бесконечный цикл", hung)
+
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)
 print("ИТОГО: прошло %d, провалено %d" % (len(PASS), len(FAIL)))

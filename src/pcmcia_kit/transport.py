@@ -15,6 +15,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 
 from . import console
 
@@ -111,8 +112,15 @@ class Target:
         if self.dry_run:
             console.say("  (пробный режим) " + " ".join(argv))
             return 0, ""
-        proc = subprocess.run(argv, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace")
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace",
+                                  timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Раньше timeout принимался, но в subprocess не передавался:
+            # зависший ssh (например, сессия ждёт пароль) висел вечно.
+            return 124, (f"команда не завершилась за {timeout} с и была "
+                         f"прервана: {command}")
         text = (proc.stdout or "") + (proc.stderr or "")
         return proc.returncode, text
 
@@ -134,6 +142,19 @@ class Target:
         proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, encoding="utf-8", errors="replace",
                                 bufsize=1)
+        expired = []
+
+        def _stop():
+            """Сторож: убить процесс, если он не уложился в таймаут."""
+            expired.append(True)
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+        guard = threading.Timer(timeout, _stop)
+        guard.daemon = True
+        guard.start()
         try:
             for raw in proc.stdout:
                 collected.append(raw)
@@ -150,9 +171,13 @@ class Target:
                         last_percent = pct
                     console.say(line)
         finally:
+            guard.cancel()
             if proc.poll() is None:
                 proc.kill()
             proc.wait(timeout=30)
+        if expired:
+            console.say(f"  прервано по таймауту {timeout} с")
+            return 124, "".join(collected)
         return proc.returncode, "".join(collected)
 
     def copy_to(self, files, destination):

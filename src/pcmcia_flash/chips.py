@@ -513,16 +513,22 @@ def verify_geometry(flash, geo: dict, progress=None,
 
 
 def sector_table(geo: dict, total: int) -> list[dict]:
-    """Построить таблицу секторов для микросхемы.
+    """Таблица секторов карты: список {"offset": int, "size": int}.
 
-    Возвращает список словарей: {"offset": int, "size": int}.
+    total - ёмкость КАРТЫ в байтах (geo["size"] - ёмкость одного чипа).
+    Раньше total игнорировался и таблица всегда строилась по ёмкости чипа,
+    то есть вдвое короче для пары - по такой таблице последние секторы карты
+    не попали бы в план записи. Последний сектор урезается по total.
     """
-    sector_size = geo["sector"]
-    chip_size = geo["size"]
+    sector_size = int(geo["sector"])
+    limit = int(total or geo.get("size") or 0)
+    if sector_size <= 0 or limit <= 0:
+        return []
     table: list[dict] = []
     offset = 0
-    while offset < chip_size:
-        table.append({"offset": offset, "size": sector_size})
+    while offset < limit:
+        table.append({"offset": offset,
+                      "size": min(sector_size, limit - offset)})
         offset += sector_size
     return table
 

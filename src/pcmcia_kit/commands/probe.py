@@ -27,8 +27,7 @@ def run(target, kit_dir, action, remote_path="", assume_yes=False, full=False,
     hint = HINTS.get(action)
     if hint and not json_out:
         console.say(f"  {hint}")
-    remote_cmd = rctl.build(action, remote_path, assume_yes, full,
-                            json_out=json_out)
+    remote_cmd = rctl.build(action, remote_path, assume_yes, full)
     steps.describe(target, action, remote_cmd, remote_path)
 
     if not steps.connect(target):

@@ -3472,7 +3472,11 @@ class NorBus:
             self.ensure(card_off + got, 1)
             take = min(n - got, self._base + self._len - (card_off + got))
             if take <= 0:
-                continue
+                # Окно не покрывает адрес (он за концом карты). Прежде здесь
+                # стоял continue - то есть бесконечный цикл вместо ошибки.
+                raise DirectError(
+                    f"адрес {card_off + got:#x} за пределами карты "
+                    f"(окно {self._base:#x}+{self._len:#x})")
             start = self._off + card_off + got - self._base
             out += self._m[start:start + take]
             got += take
@@ -3616,14 +3620,17 @@ class NorFlashStatus:
     def erase_suspend(self):
         """Приостановка стирания (команда B0h).
 
-        Позволяет прервать стирание сектора на время до 20 мкс, чтобы
-        прочитать данные из другого сектора. После приостановки нужно
-        вызвать erase_resume() для продолжения.
+        Позволяет приостановить стирание сектора, чтобы прочитать или записать
+        данные в ДРУГОЙ сектор, а затем продолжить (erase_resume,
+        команда 30h). Пауза не ограничена 20 мкс - ограничен только отклик на
+        саму команду B0h.
 
         Возвращает True если команда принята, False если не поддерживается.
         """
-        if self.protocol != "jedec" or not self.bypass:
-            # Erase Suspend работает у микросхем с CFI (D-ревизия и новее)
+        if self.protocol != "jedec":
+            # B0h/30h - команды JEDEC-набора AMD/Fujitsu; у Intel 28F
+            # приостановки стирания нет. К Unlock Bypass (20h) это отношения
+            # не имеет: прежнее условие «только при bypass» было неверным.
             return False
         self._send(self.cmd1, NOR_ERASE_SUSPEND)
         self._erase_suspended = True
