@@ -80,26 +80,65 @@ class UnsupportedChip(ValueError):
     """Микросхема известна, но этим набором работать с ней нельзя."""
 
 
-def require_uniform(geo: dict) -> dict:
-    """Проверить, что карта секторов однородная; иначе - отказ с причиной.
+def sector_map(geo: dict) -> list[tuple[int, int]]:
+    """Карта секторов ОДНОГО чипа: [(размер, число), ...] от младших адресов.
 
-    Зачем отказывать, а не «попробовать»: стирание идёт по границам сектора,
-    вычисленным как «ёмкость / размер сектора». У микросхем с boot-блоком
-    первый сектор 16 КиБ, затем 8+8+32 КиБ, и только дальше 64 КиБ. Если
-    стирать такой чип, считая все сектора 64-килобайтными, команда 30h,
-    посланная по адресу 0x8000, сотрёт сектор 0x0000-0x7FFF вместе с
-    паспортом карты. Поэтому - честный отказ, а не порча данных.
+    У большинства микросхем карта однородная, и она собирается из sector/size.
+    У boot-микросхем карта задана в chips.json (16K + 2x8K + 32K + N x 64K, а
+    у top-boot то же самое в обратном порядке) либо приходит из CFI, где
+    erase-регионы описаны именно так.
     """
-    if geo.get("uniform", True):
-        return geo
-    notes = geo.get("notes") or "неоднородная карта секторов"
-    raise UnsupportedChip(
-        f"{geo.get('name') or 'микросхема'}: {notes}. Этот набор стирает "
-        f"секторами одного размера, а у boot-чипов первый сектор меньше - "
-        f"стирание задело бы соседние данные. Поддержка карты секторов пока "
-        f"не сделана (см. ПЛАН_РАЗВИТИЯ_2.17). Укажите --chip с однородной "
-        f"микросхемой или --sector, если точно знаете раскладку."
-    )
+    pairs = geo.get("sectors") or []
+    if pairs:
+        return [(int(size), int(count)) for size, count in pairs]
+    sector = int(geo.get("sector") or 0)
+    size = int(geo.get("size") or 0)
+    if sector > 0 and size > 0 and size % sector == 0:
+        return [(sector, size // sector)]
+    return []
+
+
+def check_sector_map(geo: dict) -> dict:
+    """Убедиться, что карта секторов сходится с ёмкостью чипа.
+
+    Без карты стирать нельзя: границы сектора вычислялись бы как «ёмкость /
+    размер», а у boot-чипа первый сектор 16 КиБ. Стирание «сектора 64 КиБ» по
+    адресу 0x8000 задело бы 16K+8K+8K+32K, то есть паспорт карты и соседние
+    данные.
+    """
+    pairs = sector_map(geo)
+    size = int(geo.get("size") or 0)
+    name = geo.get("name") or "микросхема"
+    if not pairs or not size:
+        raise UnsupportedChip(
+            f"{name}: неизвестна карта секторов (нет ни размера сектора, "
+            f"ни списка секторов). Укажите модель ключом --chip."
+        )
+    total = sum(s * c for s, c in pairs)
+    if total != size:
+        raise UnsupportedChip(
+            f"{name}: карта секторов даёт {total} байт, а ёмкость чипа "
+            f"{size} - данные противоречат друг другу, работать нельзя."
+        )
+    return geo
+
+
+def sector_at(geo: dict, chip_off: int) -> tuple[int, int]:
+    """Границы сектора, содержащего адрес ВНУТРИ чипа: (начало, размер).
+
+    Адрес за концом чипа относится к последнему сектору - что с этим делать,
+    решает вызывающий код.
+    """
+    pairs = sector_map(geo)
+    off = 0
+    for size, count in pairs:
+        if chip_off < off + size * count:
+            return off + ((chip_off - off) // size) * size, size
+        off += size * count
+    if pairs:
+        size = pairs[-1][0]
+        return off - size, size
+    return chip_off, 0
 
 
 def geometry_for(name: str, size: int | None = None, volts: int | None = None) -> dict:
@@ -116,7 +155,7 @@ def geometry_for(name: str, size: int | None = None, volts: int | None = None) -
         if volts is not None:
             out["volts"] = volts
         out["name"] = exact_name
-        return require_uniform(out)
+        return check_sector_map(out)
 
     if name in CHIP_GEOMETRY:
         return finish(CHIP_GEOMETRY[name], name)
@@ -269,7 +308,8 @@ def read_cfi(flash) -> dict:
         if len(regions) == 1:
             out["sector"] = regions[0]["size"]      # у однородных карт - он же
         elif regions:
-            out["uniform"] = False
+            # CFI сам описывает неоднородную карту: (размер, число блоков).
+            out["sectors"] = [(reg["size"], reg["blocks"]) for reg in regions]
     finally:
         flash.reset()
     return out
@@ -302,7 +342,7 @@ def _geometry_from_cfi(cfi: dict, size: int = 0) -> dict | None:
         return out
     if not sector:
         return None
-    return {
+    out = {
         "name": f"CFI {chip_size // 1024} КиБ",
         "name_exact": False,
         "size": chip_size,
@@ -316,6 +356,9 @@ def _geometry_from_cfi(cfi: dict, size: int = 0) -> dict | None:
         "volts": (cfi.get("vcc_write_mv") or (0, 0))[1] // 1000 or None,
         "manuf": "",
     }
+    if cfi.get("sectors"):
+        out["sectors"] = list(cfi["sectors"])       # карта из CFI, в байтах
+    return out
 
 
 def _read_ids(flash) -> dict:
@@ -512,35 +555,60 @@ def verify_geometry(flash, geo: dict, progress=None,
                   f"данные возвращены")
 
 
-def sector_table(geo: dict, total: int) -> list[dict]:
+def sector_table(geo: dict, total: int, chips: int = 1) -> list[dict]:
     """Таблица секторов карты: список {"offset": int, "size": int}.
 
     total - ёмкость КАРТЫ в байтах (geo["size"] - ёмкость одного чипа).
     Раньше total игнорировался и таблица всегда строилась по ёмкости чипа,
     то есть вдвое короче для пары - по такой таблице последние секторы карты
     не попали бы в план записи. Последний сектор урезается по total.
+
+    Границы берутся из карты секторов (sector_map), а размеры умножаются на
+    число чипов: байты карты разложены по чипам, поэтому сектор 8 КиБ одного
+    чипа занимает 16 КиБ карты у пары. Для однородной микросхемы при chips=1
+    результат прежний.
     """
-    sector_size = int(geo["sector"])
     limit = int(total or geo.get("size") or 0)
-    if sector_size <= 0 or limit <= 0:
+    pairs = sector_map(geo)
+    if not pairs or limit <= 0:
         return []
+    scale = max(int(chips or 1), 1)
     table: list[dict] = []
     offset = 0
     while offset < limit:
-        table.append({"offset": offset,
-                      "size": min(sector_size, limit - offset)})
-        offset += sector_size
+        # карта повторяется, если total больше одной микросхемы: так же вёл
+        # себя прежний «однородный» вариант, когда звали без chips
+        step = 0
+        for size, count in pairs:
+            size *= scale
+            for _ in range(count):
+                if offset >= limit:
+                    return table
+                table.append({"offset": offset,
+                              "size": min(size, limit - offset)})
+                offset += size
+                step += size
+        if not step:                     # карта нулевая - не зацикливаемся
+            break
     return table
 
 
-def flash_plan(image: bytes, sector: int = SECTOR) -> list[tuple[int, bool, list[int]]]:
+def flash_plan(image: bytes, sector: int = SECTOR,
+               spans=None) -> list[tuple[int, bool, list[int]]]:
     """Разбить образ на план записи по секторам.
 
     Возвращает список (смещение_сектора, нужно_стирание, список_байт_для_записи).
+    spans - готовый список границ [(начало, размер)] для карт с секторами
+    разного размера (см. NorFlash.spans); если не задан, сектор один на всех.
     """
+    chunks = spans if spans is not None else [
+        (off, min(sector, len(image) - off))
+        for off in range(0, len(image), sector)]
     plan: list[tuple[int, bool, list[int]]] = []
-    for off in range(0, len(image), sector):
-        chunk = image[off:off + sector]
+    for off, size in chunks:
+        if off >= len(image):
+            break
+        chunk = image[off:off + size]
         need_erase = any(b != 0xFF for b in chunk)
         writes = [i for i, b in enumerate(chunk) if b != 0xFF]
         plan.append((off, need_erase, writes))
@@ -548,7 +616,8 @@ def flash_plan(image: bytes, sector: int = SECTOR) -> list[tuple[int, bool, list
 
 
 __all__ = [
-    "CHIP_GEOMETRY", "geometry_for", "require_uniform", "UnsupportedChip",
+    "CHIP_GEOMETRY", "geometry_for", "sector_map", "sector_at",
+    "check_sector_map", "UnsupportedChip",
     "chip_name_from_info", "read_cfi",
     "identify_chip", "autodetect_chip", "verify_geometry",
     "sector_table", "flash_plan", "PAGE_NONE",

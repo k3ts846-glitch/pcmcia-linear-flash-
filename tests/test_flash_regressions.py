@@ -11,12 +11,14 @@ CFI со сдвигом на байт), поэтому «231 проверка п
   * проверка геометрии не уничтожает данные (снимок и возврат);
   * CFI читается по раскладке cfi.h: 0x2C - номер региона, 0x2D.. - регионы;
   * автоопределение по JEDEC ID сравнивает числа, а не строку «AMD»;
-  * у boot-микросхем (16K+8K+8K+32K+64K) работа запрещена, а не «примерно»;
+  * у boot-микросхем (16K+8K+8K+32K+64K) стирание идёт по КАРТЕ секторов,
+    а не «округлением по 64 КиБ» (раньше такие чипы просто отвергались);
   * если микросхема не знает Unlock Bypass (20h), запись уходит на A0h.
 
 Запуск: python3 tests/test_flash_regressions.py   (карта и /dev/mem не нужны)
 """
 import os
+import pathlib
 import sys
 import tempfile
 
@@ -140,7 +142,141 @@ check("байт записан правильно", flash.read(0x1000, 1) == b"\
       flash.read(0x1000, 1).hex())
 check("после отказа bypass больше не пробуется", flash._bypass_broken)
 
-# --- 5. Пакет src/pcmcia_flash: те же правила, чистая логика -------------------
+# --- 5. Карта секторов: стирание boot-чипа по её границам ---------------------
+# Даташит AMD Am29F800B (22358) / Am29LV160D: у boot-микросхем секторы разного
+# размера - 16K + 2x8K + 32K + N x 64K (bottom-boot) или то же в обратном
+# порядке (top-boot). Команда 30h стирает ТОЛЬКО тот сектор, в который попал
+# её адрес, поэтому «округление по 64 КиБ» на таком чипе стирает сразу четыре
+# сектора - вместе с паспортом карты. Проверяем, что границы берутся по карте.
+section("boot-чип: границы секторов по карте, а не по 64 КиБ")
+
+boot_card, _boot_bus, _boot_flash = NM.make(kit=KIT, chips=1,
+                                            chip_name="Am29F800BB", blank=False)
+D2 = boot_card.d
+
+gBB = D2.geometry_for("Am29F800BB")
+check("Am29F800BB: карта 16K + 2x8K + 32K + 15x64K",
+      D2.sector_map(gBB) == [(16384, 1), (8192, 2), (32768, 1), (65536, 15)],
+      str(D2.sector_map(gBB)))
+check("Am29F800BB: адрес 0x6000 - это 8-КиБ сектор 0x6000",
+      D2.sector_at(gBB, 0x6000) == (0x6000, 0x2000),
+      str(D2.sector_at(gBB, 0x6000)))
+check("Am29F800BB: адрес 0x8000 - это 32-КиБ сектор 0x8000",
+      D2.sector_at(gBB, 0x8000) == (0x8000, 0x8000),
+      str(D2.sector_at(gBB, 0x8000)))
+try:
+    D2.check_sector_map(D2.geometry_for("Am29F800"))
+    check("Am29F800 без ревизии отвергнут (BB и BT стирают по-разному)", False)
+except D2.DirectError as exc:
+    check("Am29F800 без ревизии отвергнут (BB и BT стирают по-разному)",
+          "ревизи" in str(exc), str(exc)[:80])
+
+# Стирание на модели: стирается РОВНО один сектор карты, соседние целы.
+img_bb = bytes((i * 7 + 3) & 0xFF for i in range(1 << 20))
+template = bytes(img_bb)
+boot_card.mem[0][:] = template
+ok, why = _boot_flash.erase_sector(0x6000 + 7)          # внутри 8-КиБ сектора
+check("стирание 8-КиБ сектора: стёрт только 0x6000-0x7FFF",
+      ok and _boot_flash.read(0x6000, 0x2000) == b"\xff" * 0x2000
+      and _boot_flash.read(0x5FFF, 1) == template[0x5FFF:0x6000]
+      and _boot_flash.read(0x8000, 1) == template[0x8000:0x8001], why)
+boot_card.mem[0][:] = template
+ok, why = _boot_flash.erase_sector(3)                   # внутри 16-КиБ сектора
+check("стирание 16-КиБ сектора: стёрт только 0x0000-0x3FFF",
+      ok and _boot_flash.read(0, 0x4000) == b"\xff" * 0x4000
+      and _boot_flash.read(0x4000, 1) == template[0x4000:0x4001], why)
+boot_card.mem[0][:] = template
+ok, why = _boot_flash.erase_sector(0x8001)              # внутри 32-КиБ сектора
+check("стирание 32-КиБ сектора: стёрт только 0x8000-0xFFFF",
+      ok and _boot_flash.read(0x8000, 0x8000) == b"\xff" * 0x8000
+      and _boot_flash.read(0x10000, 4) == template[0x10000:0x10004], why)
+check("boot-чип 1 МиБ = 19 секторов в адресах карты",
+      len(_boot_flash.spans(1 << 20)) == 19
+      and _boot_flash.spans(1 << 20)[-1] == (0xF0000, 0x10000),
+      str(_boot_flash.spans(1 << 20)[-1]))
+
+# top-boot: мелкие секторы в КОНЦЕ, и проверка геометрии должна брать именно
+# последний (самый маленький) - иначе она «проверяет» не тот сектор.
+bt_card, _bt_bus, bt_flash = NM.make(kit=KIT, chips=1, chip_name="Am29F800BT",
+                                     blank=False)
+bt_card.mem[0][:] = template
+check("top-boot: последний сектор - 16 КиБ по адресу 0xFC000",
+      bt_flash.spans(1 << 20)[-1] == (0xFC000, 0x4000),
+      str(bt_flash.spans(1 << 20)[-1]))
+ok, why = bt_flash.erase_sector(0xFC005)
+check("top-boot: стирание 16-КиБ сектора не трогает 0xFBFFF",
+      ok and bt_flash.read(0xFC000, 0x4000) == b"\xff" * 0x4000
+      and bt_flash.read(0xFBFFF, 1) == template[0xFBFFF:0xFC000], why)
+bt_card.mem[0][:] = template
+seen = []
+_orig_erase = bt_flash.erase_sector
+bt_flash.erase_sector = lambda off: (seen.append(off), _orig_erase(off))[1]
+ok_g, why_g = D2.verify_geometry(bt_flash, {"sector": bt_flash.sector,
+                                            "size": 1 << 20})
+check("проверка геометрии берёт последний сектор по карте (0xFC000), "
+      "а данные возвращает",
+      ok_g and seen == [0xFC000] and bytes(bt_card.mem[0]) == template,
+      "%s %s" % (why_g, [hex(x) for x in seen]))
+bt_flash.erase_sector = _orig_erase
+
+# План записи обязан идти по границам карты: иначе chunk[i] соберётся из двух
+# разных секторов, и стирание одного из них уничтожит данные другого.
+zeros = bytes(1 << 20)
+plan_bb = D2.flash_plan(zeros, _boot_flash.sector, _boot_flash.spans(len(zeros)))
+check("flash_plan по карте: 19 шагов, каждый начинается с границы сектора",
+      len(plan_bb) == 19
+      and [p[0] for p in plan_bb] == [s[0] for s in _boot_flash.spans(1 << 20)],
+      str([p[0] for p in plan_bb][:5]))
+check("flash_plan по карте: размер шага равен размеру сектора",
+      [len(p[2]) for p in plan_bb] == [s[1] for s in _boot_flash.spans(1 << 20)],
+      str([s[1] for s in _boot_flash.spans(1 << 20)]))
+
+
+# --- 6. CFI снимает вопрос о ревизии -----------------------------------------
+# У Am29F800 код устройства 58h одинаков у BB и BT, то есть JEDEC ID ревизию не
+# различает. Но CFI отдаёт erase-регионы - и по ним карта восстанавливается.
+section("CFI: erase-регионы = карта секторов (снимает вопрос о ревизии)")
+
+cfi_card, _cfi_bus, cfi_flash = NM.make(kit=KIT, chips=1,
+                                        chip_name="Am29F800BB")
+geo_cfi = D2.identify_chip(cfi_flash)
+check("CFI дал 4 региона -> sectors = 16K+2x8K+32K+15x64K",
+      geo_cfi["sectors"] == [(16384, 1), (8192, 2), (32768, 1), (65536, 15)],
+      str(geo_cfi["sectors"]))
+check("неоднозначность снята: ambiguous=False", not geo_cfi["ambiguous"])
+check("в отчёте видно, откуда карта",
+      "карта секторов из CFI" in (geo_cfi.get("how") or ""),
+      str(geo_cfi.get("how")))
+# Без CFI ревизию различает только код устройства - и он РАЗНЫЙ:
+# include/flashrom include/flashchips.h: AMD_AM29F800BB 0x58, AMD_AM29F800BT
+# 0xD6 (AMD pub#20375B). Прежняя таблица набора этого не знала и называла
+# 0x58 «Am29F800» без ревизии, то есть выбирала геометрию наугад.
+check("коды с ревизией: 0x58 -> Am29F800BB, 0xD6 -> Am29F800BT",
+      D2.vendor_part(0x01, 0x58) == ("Am29F800BB", 8)
+      and D2.vendor_part(0x01, 0xD6) == ("Am29F800BT", 8),
+      str((D2.vendor_part(0x01, 0x58), D2.vendor_part(0x01, 0xD6))))
+check("Fujitsu (вендор 04h): 0xAD -> MBM29F016A",
+      D2.vendor_part(0x04, 0xAD) == ("MBM29F016A", 16),
+      str(D2.vendor_part(0x04, 0xAD)))
+bad_cap = [hex(did) for did, (name, mbit) in D2.AMD_PARTS.items()
+           if name not in D2.GEOMETRY
+           or D2.GEOMETRY[name]["size"] * 8 // (1 << 20) != mbit]
+check("ёмкость в таблице ID сходится с ёмкостью микросхемы "
+      "(было: 0xAB «32 Мбит», 0xD5 «16 Мбит», 0x34 «256 Мбит»)",
+      not bad_cap, str(bad_cap))
+
+bt_id_card, _bt_id_bus, bt_id_flash = NM.make(kit=KIT, chips=1,
+                                              chip_name="Am29F800BT",
+                                              no_cfi=True)
+geo_bt_id = D2.identify_chip(bt_id_flash)
+check("без CFI код 0xD6 даёт top-boot карту (мелкие секторы в конце)",
+      geo_bt_id["name"] == "Am29F800BT"
+      and D2.sector_map(geo_bt_id)[-1] == (16384, 1)
+      and D2.sector_at(geo_bt_id, 0xFC000) == (0xFC000, 0x4000),
+      str((geo_bt_id["name"], D2.sector_map(geo_bt_id)[-1:])))
+
+
+# --- 7. Пакет src/pcmcia_flash: те же правила, чистая логика -------------------
 section("src/pcmcia_flash: CFI, автоопределение, таблица микросхем")
 
 from pcmcia_flash import chips as C                                 # noqa: E402
@@ -199,13 +335,29 @@ geo = C.identify_chip(FakeFlash(table, ids=(None, None)),
 check("микросхема молчит -> JEDEC ID берётся из паспорта ('0x04'/'0xad')",
       geo.get("name") == "MBM29F016", str(geo.get("name")))
 
-refused = False
-try:
-    C.geometry_for("Am29F400AT")
-except C.UnsupportedChip:
-    refused = True
-check("boot-чип (16K+8K+8K+32K+7x64K): отказ, а не стирание «по 64 КиБ»",
-      refused)
+# boot-чип: карта секторов должна сходиться с ёмкостью и давать правильные
+# границы - 16K, 2x8K, 32K в начале, дальше по 64K
+boot = C.geometry_for("Am29F400AB")
+check("boot-чип: карта секторов 16K+2x8K+32K+7x64K",
+      C.sector_map(boot) == [(16384, 1), (8192, 2), (32768, 1), (65536, 7)],
+      str(C.sector_map(boot)))
+check("boot-чип: адрес 0x8000 попадает в 32-КиБ сектор 0x8000",
+      C.sector_at(boot, 0x8000) == (0x8000, 0x8000),
+      str(C.sector_at(boot, 0x8000)))
+check("boot-чип: адрес 0x7FFF попадает в 8-КиБ сектор 0x6000",
+      C.sector_at(boot, 0x7FFF) == (0x6000, 0x2000),
+      str(C.sector_at(boot, 0x7FFF)))
+top = C.geometry_for("Am29F400AT")
+# 512 КиБ, top-boot: 0x00000..0x6FFFF по 64K, далее 32K, 8K, 8K и 16K последним
+check("top-boot: мелкие секторы в КОНЦЕ (последний - 16 КиБ)",
+      C.sector_map(top) == [(65536, 7), (32768, 1), (8192, 2), (16384, 1)]
+      and C.sector_at(top, 0x7FFFF) == (0x7C000, 0x4000)
+      and C.sector_at(top, 0x70000) == (0x70000, 0x8000),
+      str((C.sector_map(top), C.sector_at(top, 0x7FFFF))))
+bad_maps = [n for n, g in C.CHIP_GEOMETRY.items()
+            if sum(sz * cnt for sz, cnt in C.sector_map(g)) != g["size"]]
+check("у всех чипов карта секторов сходится с ёмкостью", not bad_maps,
+      str(bad_maps[:3]))
 check("Am29LV400BB = 4 Мбит = 512 КиБ (было 4 МиБ)",
       C.CHIP_GEOMETRY["Am29LV400BB"]["size"] == 512 << 10,
       str(C.CHIP_GEOMETRY["Am29LV400BB"]["size"]))
@@ -218,9 +370,59 @@ check("в таблице нет выдуманных «производител�
       not any(n in C.CHIP_GEOMETRY for n in
               ("ToshibaTC58", "SamsungNAND", "HitachiHN28F", "NECuPD",
                "SharpLH", "STMicro", "MitsubishiM5M")))
-bad = [n for n, g in C.CHIP_GEOMETRY.items()
-       if g["uniform"] and g["size"] % g["sector"]]
-check("у всех однородных чипов ёмкость кратна сектору", not bad, str(bad))
+
+
+# Две реализации должны говорить об одном и том же: пакет и монолит -
+# независимые копии, и именно так они разошлись (28F016S5: 128 КиБ против
+# 64 КиБ, дело дошло до ложного отказа blank-check).
+section("две реализации не расходятся в геометрии")
+
+shared = set(C.CHIP_GEOMETRY) & set(D.GEOMETRY)
+drift = [(n, C.CHIP_GEOMETRY[n]["size"], D.GEOMETRY[n]["size"],
+          C.sector_map(C.CHIP_GEOMETRY[n]), D.sector_map(D.GEOMETRY[n]))
+         for n in sorted(shared)
+         if C.CHIP_GEOMETRY[n]["size"] != D.GEOMETRY[n]["size"]
+         or C.sector_map(C.CHIP_GEOMETRY[n]) != D.sector_map(D.GEOMETRY[n])]
+check("ёмкость и карта секторов совпадают у всех %d общих имён" % len(shared),
+      bool(shared) and not drift, str(drift[:2]))
+
+# Повторяющийся ключ в литерале молча перекрывает предыдущий: 6 таких пар
+# было в GEOMETRY (28F008SA, 28F016SA, 28F016S5, 28F320, M28F102, M28F016S5).
+import ast                                                          # noqa: E402
+
+dup_keys = []
+for node in ast.walk(ast.parse(pathlib.Path(KIT, "windows/legacy",
+                                            "pcmcia_direct.py")
+                              .read_text(encoding="utf-8"))):
+    if isinstance(node, ast.Dict):
+        seen = {}
+        for k in node.keys:
+            if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                seen.setdefault(k.value, []).append(k.lineno)
+        dup_keys += ["%s:%s" % (k, v) for k, v in seen.items() if len(v) > 1]
+check("в GEOMETRY нет повторяющихся ключей (они молча перекрывают друг друга)",
+      not dup_keys, str(dup_keys[:3]))
+# Таблица секторов карты для boot-пары: карта чипа масштабируется на число
+# чипов (8 КиБ чипа = 16 КиБ карты), поэтому у пары Am29F800BB первый сектор
+# 32 КиБ, а не 16, и вся карта 2 МиБ укладывается в 19 секторов.
+bb_geo = C.geometry_for("Am29F800BB")
+bb_tbl = C.sector_table(bb_geo, 2 << 20, chips=2)
+check("sector_table boot-пары: 19 секторов, первый 32 КиБ, сумма = ёмкость",
+      len(bb_tbl) == 19 and bb_tbl[0]["size"] == 32 << 10
+      and bb_tbl[-1]["size"] == 128 << 10
+      and sum(s["size"] for s in bb_tbl) == 2 << 20,
+      str((len(bb_tbl), bb_tbl[0], bb_tbl[-1])))
+mb_tbl = D.sector_table(bb_geo, 2 << 20, chips=2)
+check("sector_table в монолите даёт то же самое",
+      [(s["offset"], s["size"]) for s in bb_tbl] == mb_tbl,
+      str(mb_tbl[:2]))
+
+check("28F016S5: 32 x 64 КиБ (даташит Intel «16 Mbit: Thirty-Two Blocks»), "
+      "а не 16 x 128 КиБ",
+      D.GEOMETRY["28F016S5"]["sector"] == 64 << 10
+      and D.sector_map(D.GEOMETRY["28F016S5"]) == [(65536, 32)],
+      str(D.sector_map(D.GEOMETRY["28F016S5"])))
+
 
 # verify_geometry в пакете: отдельная копия логики, проверяем и её
 class FakeNor:

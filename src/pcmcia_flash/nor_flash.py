@@ -134,11 +134,16 @@ class NorFlashIO:
 
     def __init__(self, bus, chips=2, sector=SECTOR, verbose=False, polls=None,
                  cmd=(NOR_CMD_ADDR1, NOR_CMD_ADDR2), wide=False, page=1,
-                 bypass=False, strata=False, name="", protocol="jedec"):
+                 bypass=False, strata=False, name="", protocol="jedec",
+                 sector_map=None):
         self.bus = bus
         self.chips = max(int(chips or 1), 1)
         # sector здесь - В АДРЕСАХ КАРТЫ (уже умножен на число чипов).
         self.sector = int(sector or SECTOR)
+        # sector_map - карта секторов ОДНОГО чипа: [(размер, число), ...] от
+        # младших адресов. Пусто - карта однородная (см. span()).
+        self.sector_map = [(int(size), int(count))
+                           for size, count in (sector_map or [])]
         self.protocol = protocol or "jedec"
         self.strata = bool(strata)                  # AMD/Fujitsu StrataFlash 25h/D0h
         self.verbose = verbose
@@ -178,6 +183,41 @@ class NorFlashIO:
 
     def read_byte(self, card_off):
         return self.bus.rd(card_off)
+
+    def span(self, card_off):
+        """Границы сектора карты, содержащего адрес: (начало, размер).
+
+        Для boot-микросхем это единственный правильный способ: секторы там
+        разного размера (16K + 8K + 8K + 32K + N x 64K), и «округление по
+        64 КиБ» стёрло бы не то.
+        """
+        if not self.sector_map:
+            base = card_off - (card_off % self.sector)
+            return base, self.sector
+        off = 0
+        for size, count in self.sector_map:
+            size *= self.chips                     # в адресах карты
+            if card_off < off + size * count:
+                return off + ((card_off - off) // size) * size, size
+            off += size * count
+        size = self.sector_map[-1][0] * self.chips
+        return max(off - size, 0), size
+
+    def spans(self, length):
+        """Секторы карты, покрывающие первые length байт: [(начало, размер)]."""
+        if not self.sector_map:
+            return [(off, min(self.sector, length - off))
+                    for off in range(0, length, self.sector)]
+        out = []
+        off = 0
+        for size, count in self.sector_map:
+            size *= self.chips
+            for _ in range(count):
+                if off >= length:
+                    return out
+                out.append((off, min(size, length - off)))
+                off += size
+        return out
 
     # --- команды -----------------------------------------------------------
 
@@ -720,7 +760,7 @@ class NorFlashProgramming:
 
     def _intel_erase(self, card_off):
         """Стирание блока по командам CUI: 20h (setup), затем D0h (confirm)."""
-        base = card_off - (card_off % self.sector)
+        base, _size = self.span(card_off)
         for chip in range(self.chips):
             local = chip_local(base, self.chips)
             self._intel_send(chip, INTEL_CUI_ERASE_SETUP, local)
@@ -773,7 +813,7 @@ class NorFlashErase:
         Если послать одну команду по чётному адресу, второй чип не сотрётся,
         и запись в нечётные байты провалится с «байт не стёрт».
         """
-        base = card_off - (card_off % self.sector)
+        base, _size = self.span(card_off)
         if self.protocol == "intel":
             return self._intel_erase(base)
         # base - АБСОЛЮТНОЕ смещение; чипу нужен адрес ВНУТРИ него, поэтому

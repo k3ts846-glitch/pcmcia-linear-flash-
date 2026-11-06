@@ -135,7 +135,8 @@ def _flash_open(args, want_write=True, probe=True):
                      cmd=tuple(geo["cmd"]), wide=geo["wide"],
                      page=geo.get("page") or 1,
                      bypass=bool(geo.get("bypass")),
-                     name=geo.get("name", ""), protocol=protocol)
+                     name=geo.get("name", ""), protocol=protocol,
+                     sector_map=geo.get("sectors") or None)
     return {"dev": dev, "exca": exca, "wins": wins, "win": win, "mem": mem,
             "bus": bus, "flash": flash, "chips": chips, "size": size,
             "src": src, "geo": geo, "info": info}
@@ -168,6 +169,11 @@ def _flash_report(parts, extra_lines=()):
           + ("CUI Intel 28F (20h/D0h, статусный регистр 70h)"
              if geo.get("protocol") == "intel"
              else "JEDEC (AA/55, A0h, 80h/30h, DQ7/DQ5)"))
+    sectors = geo.get("sectors") or []
+    if len(sectors) > 1:
+        layout = " + ".join(f"{count} x {size // 1024} КиБ"
+                            for size, count in sectors)
+        print(f"  карта секторов        : {layout} (неоднородная)")
     print(f"  адреса команд         : {cmd[0]:#x} / {cmd[1]:#x}"
           + (", команда СЛОВОМ (Intel 28F)" if geo.get("wide")
              else ", командой байт")
@@ -359,16 +365,28 @@ def _flash_main(args):
             print(f"ОШИБКА: образ {len(data)} байт больше карты "
                   f"({parts['size']} байт) - запись отменена", file=sys.stderr)
             return 2
-        if len(data) % SECTOR:
-            print(f"ОШИБКА: размер образа ({len(data)}) не кратен сектору "
-                  f"{SECTOR}: так писать нельзя - неясно, что делать с ")
-            print("  хвостом", file=sys.stderr)
+        # Границы секторов - по карте микросхемы: у boot-чипов они разного
+        # размера, и «кратно 64 КиБ» ничего не гарантирует. Запрещаем образ,
+        # который обрезает сектор посередине: хвост остался бы стёртым.
+        spans = (flash.spans(len(data))
+                 if callable(getattr(flash, "spans", None)) else None)
+        if spans:
+            tail_off, tail_have = spans[-1]
+            tail_full = flash.span(tail_off)[1]
+        else:
+            tail_off, tail_full = 0, flash.sector
+            tail_have = len(data) % flash.sector or tail_full
+        if tail_have != tail_full:
+            print(f"ОШИБКА: размер образа ({len(data)}) обрезает сектор "
+                  f"{tail_off:#x} ({tail_have} из {tail_full} байт): так "
+                  f"писать нельзя - хвост сектора остался бы стёртым",
+                  file=sys.stderr)
             return 2
         if parts["size"] and len(data) < parts["size"]:
             left = parts["size"] - len(data)
             print(f"ВНИМАНИЕ: образ меньше карты на {left} байт; эти секторы ")
             print("  останутся как есть (набор их не стирает).")
-        plan = flash_plan(data)
+        plan = flash_plan(data, flash.sector, spans=spans)
         need = sum(1 for _o, e, _w in plan if e)
         nbytes = sum(len(w) for _o, _e, w in plan)
         print(f"\nПлан: секторов всего {len(plan)}, из них стирать {need}, "

@@ -607,9 +607,18 @@ def writes_for_bypass(plan):
 
 # --- запись образа ------------------------------------------------------------
 
+def _span_size(flash, offset):
+    """Размер сектора карты, в который попадает адрес (для boot-карт - разный)."""
+    span = getattr(flash, "span", None)
+    if callable(span):
+        return span(offset)[1]
+    return flash.sector
+
+
 def flash_probe(flash, offset=0, payload=None, progress=None):
     """ПРОБА: стереть и записать ОДИН сектор, прочитать обратно, сравнить."""
-    sector = flash.sector
+    offset, sector = (flash.span(offset) if callable(getattr(flash, "span", None))
+                      else (offset - (offset % flash.sector), flash.sector))
     if payload is None:
         pattern = bytearray([0x00, 0xFF, 0x55, 0xAA] * 64)
         pattern += bytes(range(256)) * 2
@@ -655,8 +664,11 @@ def flash_probe(flash, offset=0, payload=None, progress=None):
 def flash_probe_safe(flash, offset=0, backup_dir=None, progress=None):
     """Проба записи, которая не теряет данные."""
     import os as _os
-    sector = flash.sector
-    base = offset - (offset % sector)
+    if callable(getattr(flash, "span", None)):
+        base, sector = flash.span(offset)
+    else:
+        sector = flash.sector
+        base = offset - (offset % sector)
     if progress:
         progress("читаю сектор, чтобы его не потерять")
     original = flash.read(base, sector)
@@ -703,7 +715,12 @@ def flash_write_image(flash, image, progress=None, verify=True,
                       erase_first=False, journal=None, resume=False,
                       remote_dir=None, backup_dir=None):
     """Записать образ на карту. Возвращает dict с честным итогом."""
-    plan = flash_plan(image, flash.sector)
+    # План строится по КАРТЕ СЕКТОРОВ карты: у boot-микросхем секторы разного
+    # размера, и «шаг 64 КиБ» стёр бы не то. Для однородных карт spans даёт
+    # ровно то же, что и раньше.
+    spans = getattr(flash, "spans", None)
+    plan = flash_plan(image, flash.sector,
+                      spans=spans(len(image)) if callable(spans) else None)
     total = len(plan)
     res = {"sectors": total, "erased": 0, "bytes": 0, "ok": False,
            "failed_at": None, "why": "", "backups": []}
@@ -736,10 +753,11 @@ def flash_write_image(flash, image, progress=None, verify=True,
         if progress:
             progress(f"сектор {no} из {total}: {off:#x}",
                      (no - 1) / max(total, 1))
+        span_size = _span_size(flash, off)
         if backup_dir and need_erase:
             backup_path = os.path.join(backup_dir, f"sector-{off:08x}.bin")
             try:
-                sector_data = flash.read(off, flash.sector)
+                sector_data = flash.read(off, span_size)
                 with open(backup_path, "wb") as bf:
                     bf.write(sector_data)
                 res["backups"].append(backup_path)
@@ -755,7 +773,7 @@ def flash_write_image(flash, image, progress=None, verify=True,
                 res["why"] = f"стирание сектора {off:#x}: {why}"
                 return res
             res["erased"] += 1
-            blank = flash.read(off, flash.sector)
+            blank = flash.read(off, span_size)
             bad = [i for i, b in enumerate(blank) if b != 0xFF]
             if bad:
                 res["failed_at"] = off + bad[0]
@@ -772,7 +790,7 @@ def flash_write_image(flash, image, progress=None, verify=True,
                 res["why"] = f"стирание сектора {off:#x}: {why}"
                 return res
             res["erased"] += 1
-            blank = flash.read(off, flash.sector)
+            blank = flash.read(off, span_size)
             bad = [i for i, b in enumerate(blank) if b != 0xFF]
             if bad:
                 res["failed_at"] = off + bad[0]

@@ -180,6 +180,19 @@ class ModelCardIO:
 class ModelCardState:
     """Конечный автомат модели: обработка команд шины (store, CUI, режимы)."""
 
+    def _sector_at(self, local):
+        """Границы сектора ЧИПА, содержащего local: (начало, размер)."""
+        if not self.sector_map:
+            sector = self.sector // max(self.chips, 1)
+            return local - (local % sector), sector
+        off = 0
+        for size, count in self.sector_map:
+            if local < off + size * count:
+                return off + ((local - off) // size) * size, size
+            off += size * count
+        size = self.sector_map[-1][0]
+        return max(off - size, 0), size
+
     def store(self, off, val, wide=False, chip=None, local=None):
         """Один байт в шину. chip/local можно задать напрямую (см. write_many)."""
         d = self.d
@@ -216,8 +229,7 @@ class ModelCardState:
                     return
                 if self.quiet_erase:
                     return
-                chip_sector = self.sector // max(self.chips, 1)
-                base = local - (local % chip_sector)
+                base, chip_sector = self._sector_at(local)
                 for i in range(base, min(base + chip_sector, self.chip_size)):
                     self.mem[chip][i] = 0xFF
                 self.erases += 1
@@ -445,6 +457,12 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
         self.chip_name = chip_name
         self.protocol = g.get("protocol", "jedec")
         self.sector_chip = int(sector_override or g["sector"])
+        # Карта секторов ОДНОГО чипа: у boot-микросхем она неоднородная
+        # (16K + 8K + 8K + 32K + N x 64K, у top-boot - наоборот). Модель
+        # стирает именно тот сектор, в который попал адрес 30h, поэтому
+        # «округление по sector» тут повторяло бы ошибку кода, а не ловило её.
+        self.sector_map = [(int(sz), int(cnt))
+                           for sz, cnt in (g.get("sectors") or [])]
         self.cmd = tuple(g["cmd"])
         self.wide = bool(g["wide"])
         self.chip_size = int(chip_size or g["size"] or CHIP)
@@ -490,6 +508,14 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
         table = {"Am29F016": (0x01, 0xAD), "Am29F032": (0x01, 0x34),
                  "Am29F080": (0x01, 0x58), "Am29F040": (0x01, 0xA4),
                  "Am29LV016": (0x01, 0x49), "28F008SA": (0x89, 0xA0),
+                 # коды с ревизией - по include/flashchips.h (flashrom):
+                 # 58h = Am29F800BB, D6h = Am29F800BT, ABh = Am29F400BB,
+                 # 23h = Am29F400BT, 57h = Am29F200BB, 51h = Am29F200BT
+                 "Am29F800BB": (0x01, 0x58), "Am29F800BT": (0x01, 0xD6),
+                 "Am29F400AB": (0x01, 0xAB), "Am29F400AT": (0x01, 0x23),
+                 "Am29F200AB": (0x01, 0x57), "Am29F200AT": (0x01, 0x51),
+                 "Am29F080B": (0x01, 0xBA), "Am29LV001BB": (0x01, 0x6D),
+                 "Am29LV001BT": (0x01, 0xED),
                  "28F016SA": (0x89, 0xA1), "MBM29F016": (0x04, 0xAD)}
         return table.get(self.chip_name, (0x01, 0xFF))
 
@@ -535,13 +561,21 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
         cfi[0x29] = 0x00
         cfi[0x2A] = self.page_size_cfi        # 2^n байт буфера, 0 = нет
         cfi[0x2B] = 0x00
-        sector = self.sector_chip
-        count = max(size // sector, 1)
-        cfi[0x2C] = 1                         # один erase-регион
-        cfi[0x2D] = (count - 1) & 0xFF        # блоков - 1, младший байт
-        cfi[0x2E] = ((count - 1) >> 8) & 0xFF
-        cfi[0x2F] = (sector // 256) & 0xFF    # размер блока / 256
-        cfi[0x30] = ((sector // 256) >> 8) & 0xFF
+        # Erase-регионы. У boot-микросхем их ровно 4 (16K, 2x8K, 32K,
+        # N x 64K), и CFI отдаёт их именно так - в таблице 4 слота по 4 байта.
+        if self.sector_map:
+            regions = list(self.sector_map)[:4]
+        else:
+            sector = self.sector_chip
+            regions = [(sector, max(size // sector, 1))]
+        cfi[0x2C] = len(regions)              # число erase-регионов
+        base = 0x2D
+        for region_size, region_count in regions:
+            cfi[base] = (region_count - 1) & 0xFF        # блоков - 1 (мл.)
+            cfi[base + 1] = ((region_count - 1) >> 8) & 0xFF
+            cfi[base + 2] = (region_size // 256) & 0xFF  # размер / 256 (мл.)
+            cfi[base + 3] = ((region_size // 256) >> 8) & 0xFF
+            base += 4
         cfi[0x40:0x43] = b"PRI"               # расширенная таблица
         cfi[0x43] = 0x01                      # версия CFI 1.2
         cfi[0x44] = 0x02
@@ -606,5 +640,6 @@ def make(kit=None, span=MIB, **kw):
                        cmd=card.cmd, wide=card.wide,
                        page=geo.get("page") or 1,
                        bypass=bool(geo.get("bypass")),
-                       name=card.chip_name, protocol=card.protocol)
+                       name=card.chip_name, protocol=card.protocol,
+                       sector_map=geo.get("sectors") or None)
     return card, bus, flash
