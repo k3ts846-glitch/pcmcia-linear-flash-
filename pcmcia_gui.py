@@ -2665,7 +2665,7 @@ def main():
         print("Графическое окружение не найдено (переменная DISPLAY пуста).\n"
               "Варианты:\n"
               "  * запустить из сеанса с рабочим столом (не по ssh);\n"
-              "  * работать без графики:  sudo bash ./pcmcia_flash.sh\n"
+              "  * работать без графики:  sudo python3 linux/pcmcia_flash.py\n"
               "  * проверить состояние:   python3 pcmcia_gui.py --doctor",
               file=sys.stderr)
         sys.exit(2)

@@ -76,6 +76,18 @@ def is_root() -> bool:
     return os.geteuid() == 0
 
 
+def read_text_quiet(path) -> str:
+    """Прочитать файл, если он есть и доступен, иначе пустая строка.
+
+    /boot/grub/grub.cfg обычному пользователю не читается (Permission
+    denied) — без этого отчёт обрывался на разделе 1.1 с трейсбеком.
+    """
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+
+
 def run_to(n: int, *args: str) -> int:
     """Выполнить команду, оставив в отчёте последние n строк вывода."""
     cmd = list(args)
@@ -314,12 +326,8 @@ def main(argv: list[str] | None = None) -> int:
     except OSError:
         pass
 
-    grub_has = grubdef.is_file() and "iomem=relaxed" in grubdef.read_text(
-        encoding="utf-8", errors="ignore"
-    )
-    run_has = grubcfg.is_file() and "iomem=relaxed" in grubcfg.read_text(
-        encoding="utf-8", errors="ignore"
-    )
+    grub_has = "iomem=relaxed" in read_text_quiet(grubdef)
+    run_has = "iomem=relaxed" in read_text_quiet(grubcfg)
 
     say(f"  iomem=relaxed в cmdline : {'ДА (действует сейчас)' if cmdline_has else 'НЕТ'}")
     if grubdef.is_file():
