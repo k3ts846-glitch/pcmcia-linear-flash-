@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.10"          # версия набора: печатается в отчёте и в --selftest
+KIT_VERSION = "2.17.11"          # версия набора: печатается в отчёте и в --selftest
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -3177,14 +3177,32 @@ GEOMETRY = {
                    size=64 << 10, volts=12, ambiguous=True,
                    why="стирание только целиком (bulk erase, 12 В), команды Sector Erase нет",
                    src="Intel 28F512: 64 KiB, первое поколение, 12 В; в каталоге Intel помечена как Bulk Erase - поблочно не стирается"),
-    "28F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                   size=128 << 10, volts=12, ambiguous=True,
-                   why="стирание только целиком (bulk erase, 12 В), команды Sector Erase нет",
-                   src="Intel 28F010: 128 KiB, первое поколение, 12 В; в каталоге Intel помечена как Bulk Erase - поблочно не стирается"),
-    "28F020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                   size=256 << 10, volts=12, ambiguous=True,
-                   why="стирание только целиком (bulk erase, 12 В), команды Sector Erase нет",
-                   src="Intel 28F020: 256 KiB, первое поколение, 12 В; в каталоге Intel помечена как Bulk Erase - поблочно не стирается"),
+    # Сверено по даташиту Intel 290207-010 (28F010, ноябрь 1995). Важное:
+    # это НЕ JEDEC-микросхема - никаких 555h/2AAh: команды пишутся в регистр
+    # команд одним байтом (Read 00h, ID 90h, Erase 20h+20h, Program 40h+PA/PD,
+    # Erase Verify A0h, Program Verify C0h, Reset FFh+FFh). Стирание ТОЛЬКО
+    # всего чипа (20h/20h), блочного нет; стирание и запись возможны только
+    # при 12 В на Vpp (при Vpp < 6.5 В чип read-only); статусного регистра
+    # (70h) нет - готовность проверяется командами A0h/C0h, а не опросом бит.
+    # Поэтому строка помечена ro: набор такие микросхемы только читает, иначе
+    # он послал бы AMD-команды и «успешно» дождался DQ7 у нетронутого массива.
+    "28F010": dict(sector=128 << 10, page=1, cmd=(0, 0), wide=False,
+                   size=128 << 10, volts=12, ambiguous=True, protocol="intel",
+                   ro=True,
+                   why="стирание только ВСЕГО чипа (20h+20h, нужны 12 В на Vpp) "
+                       "и нет статусного регистра 70h - набор её не пишет",
+                   src="Intel 28F010 (128K x 8, даташит 290207-010): команды "
+                       "00h/90h/20h/40h/A0h/C0h/FFh, блочного стирания нет, "
+                       "12 В +-5% на Vpp, чип-стирание 1 с тип., байт 10 мкс тип., "
+                       "ID 89h/B4h"),
+    "28F020": dict(sector=256 << 10, page=1, cmd=(0, 0), wide=False,
+                   size=256 << 10, volts=12, ambiguous=True, protocol="intel",
+                   ro=True,
+                   why="стирание только ВСЕГО чипа (20h+20h, нужны 12 В на Vpp) "
+                       "и нет статусного регистра 70h - набор её не пишет",
+                   src="Intel 28F020: 256 KiB, то же первое поколение (12 В, "
+                       "bulk erase); отдельного даташита в наборе нет - "
+                       "поведение как у 28F010 (290207-010)"),
     # ====================================================================
     # Производители Hitachi, Mitsubishi, NEC, Sharp и др.
     # Параметры указаны по даташитам, где известны; иначе — безопасные
@@ -3439,8 +3457,11 @@ def chip_name_from_info(info):
     # («28F016SA/SV» по flashrom; ядро читает тот же A0h как 28F016S5 - у них
     # одна раскладка), 0xA6 = 28F008S5, 0xA7 = 28F004S5. Кода A1h в этих
     # таблицах нет, поэтому прежнее «A1h = 28F016SA» убрано: угадывать нельзя.
+    # 0xB4 - 28F010 по даташиту 290207-010 (Intelligent Identifier: mfr 89h,
+    # device B4h, читается и командой 90h, и поднятием A9 - второй способ в
+    # слоте недоступен). Кода 28F020 в приложенном документе нет.
     intel_ids = {0xA0: "28F016SV", 0xA2: "28F008SA", 0xA6: "28F008S5",
-                 0xA7: "28F004S5"}
+                 0xA7: "28F004S5", 0xB4: "28F010"}
     if vid == 0x89 and did in intel_ids:
         return intel_ids[did]
     prod = " ".join((info or {}).get("product") or []).upper()
@@ -3493,6 +3514,9 @@ def identify_chip(flash, info=None, force=None, progress=None):
                ambiguous=bool(geo.get("ambiguous")),
                # строка есть в таблице, но её параметры не сверены с даташитом
                unverified=bool(geo.get("unverified")),
+               # микросхема в наборе только читается (нет команды стирания,
+               # нужны 12 В и т.п.) - причина в ro_why
+               ro=bool(geo.get("ro")), ro_why=str(geo.get("why") or ""),
                src=str(geo.get("src") or ""))
     if progress:
         progress("определяю микросхему: опрос самой микросхемы")
@@ -3507,7 +3531,9 @@ def identify_chip(flash, info=None, force=None, progress=None):
                        volts=g2["volts"] or res["volts"],
                        protocol=g2.get("protocol", "jedec"),
                        sectors=list(g2.get("sectors") or res["sectors"]),
-                       ambiguous=bool(g2.get("ambiguous")))
+                       ambiguous=bool(g2.get("ambiguous")),
+                       ro=bool(g2.get("ro")),
+                       ro_why=str(g2.get("why") or res.get("ro_why") or ""))
         elif auto.get("manuf") is not None and not auto.get("id_documented"):
             # Производитель отвечает, но код устройства недокументирован:
             # не подменяем имя Am29F016 — пишем честно, что определено по CFI.
@@ -4022,7 +4048,7 @@ class NorFlashIO:
     def __init__(self, bus, chips=2, sector=SECTOR, verbose=False, polls=None,
                  cmd=(NOR_CMD_ADDR1, NOR_CMD_ADDR2), wide=False, page=1,
                  bypass=False, strata=False, name="", protocol="jedec",
-                 sector_map=None):
+                 sector_map=None, ro=False, ro_why=""):
         self.bus = bus
         self.chips = max(int(chips or 1), 1)
         # sector здесь - В АДРЕСАХ КАРТЫ (уже умножен на число чипов).
@@ -4046,6 +4072,24 @@ class NorFlashIO:
         self._bypass_broken = False                 # bypass не работает?
         self._erase_suspended = False               # стирание приостановлено?
         self.name = name
+        # ro - микросхема в этом наборе ТОЛЬКО ЧИТАЕТСЯ: её команда стирания
+        # либо отсутствует, либо требует 12 В на Vpp, либо набор её не знает.
+        # Пишем отказ с причиной, а не «пробуем A0h и смотрим».
+        self.ro = bool(ro)
+        self.ro_why = str(ro_why or "")
+
+    # --- отказ от записи ---------------------------------------------------
+    def _readonly(self, action):
+        """(False, почему) для микросхем, которые набор только читает.
+
+        Возвращает None, если запись разрешена. Причина берётся из таблицы
+        геометрии (поле why) - это даташитная формулировка, а не догадка.
+        """
+        if not self.ro:
+            return None
+        why = self.ro_why or "её команды не подтверждены даташитом"
+        return False, (f"{self.name or 'микросхема'}: {action} в этом наборе "
+                       f"не выполняется - {why}")
 
     # --- адреса команд -----------------------------------------------------
     def cmd_addr(self, local):
@@ -4303,6 +4347,9 @@ class NorFlashProgramming:
         bypass должен быть включён enter_bypass() перед пакетной записью и
         выключен exit_bypass() после.
         """
+        refuse = self._readonly("запись")
+        if refuse:
+            return refuse
         if self.protocol == "intel":
             return self._intel_program(card_off, value)
         if self.wide:
@@ -4367,6 +4414,9 @@ class NorFlashProgramming:
         0xFF после стирания). Нужен ровно один сценарий - «записать этот
         байт», поэтому значение берётся из card_off, а пара читается заранее.
         """
+        refuse = self._readonly("запись")
+        if refuse:
+            return refuse
         pair_at = card_off - (card_off % 2)
         before = self.read_byte(card_off)
         value = before if value is None else value
@@ -4394,6 +4444,9 @@ class NorFlashProgramming:
         У Intel 28F/StrataFlash с page > 1 используется буферная запись
         E8h/N/D0h (Intel CUI), у AMD StrataFlash — 25h/D0h (JEDEC).
         """
+        refuse = self._readonly("запись страницы")
+        if refuse:
+            return refuse
         if len(data) > self.page_card:
             return False, f"за один раз не больше {self.page_card} байт"
         if self.page <= 1 or len(data) <= 1:
@@ -4724,6 +4777,9 @@ class NorFlashErase:
         Если послать одну команду по чётному адресу, второй чип не сотрётся,
         и запись в нечётные байты провалится с «байт не стёрт».
         """
+        refuse = self._readonly("стирание сектора")
+        if refuse:
+            return refuse
         base, _size = self.span(card_off)
         if self.protocol == "intel":
             return self._intel_erase(base)
@@ -4753,6 +4809,9 @@ class NorFlashErase:
         В таблице 9 документа её нет: только пошаговое стирание блоков.
         Поэтому здесь честный отказ, а не «попробуем 10h и посмотрим».
         """
+        refuse = self._readonly("стирание чипа")
+        if refuse:
+            return refuse
         if self.protocol == "intel":
             return False, ("у Intel 28F008SA нет команды «стереть весь чип»: "
                            "стирать нужно поблочно (это и делает обычная запись)")
@@ -5326,7 +5385,9 @@ def _flash_open(args, want_write=True, probe=True):
                      wide=geo["wide"], page=geo.get("page") or 1,
                      bypass=bool(geo.get("bypass")),
                      name=geo.get("name", ""), protocol=protocol,
-                     sector_map=geo.get("sectors") or None)
+                     sector_map=geo.get("sectors") or None,
+                     ro=bool(geo.get("ro")),
+                     ro_why=str(geo.get("why") or ""))
     return {"dev": dev, "exca": exca, "wins": wins, "win": win, "mem": mem,
             "bus": bus, "flash": flash, "chips": chips, "size": size,
             "src": src, "geo": geo, "info": info}
@@ -5429,7 +5490,10 @@ def _identify_chip_main(args):
             warn.append("микросхеме нужны 12 В на Vpp: в слоте ноутбука их нет, "
                         "запись с неё невозможна (для Kontron PC/104-PCMCIA-1 - "
                         "только если 12 В подведены по PC/104)")
-        if geo.get("protocol") == "intel":
+        if geo.get("ro"):
+            warn.append("микросхема только ЧИТАЕТСЯ: "
+                        + str(geo.get("why") or "команды не подтверждены"))
+        elif geo.get("protocol") == "intel":
             warn.append("протокол Intel CUI: стирание только поблочно, "
                         "команды словом; статус читается регистром (70h)")
         if geo.get("name") in ("неизвестная", ""):

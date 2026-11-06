@@ -137,7 +137,7 @@ class NorFlashIO:
     def __init__(self, bus, chips=2, sector=SECTOR, verbose=False, polls=None,
                  cmd=(NOR_CMD_ADDR1, NOR_CMD_ADDR2), wide=False, page=1,
                  bypass=False, strata=False, name="", protocol="jedec",
-                 sector_map=None):
+                 sector_map=None, ro=False, ro_why=""):
         self.bus = bus
         self.chips = max(int(chips or 1), 1)
         # sector здесь - В АДРЕСАХ КАРТЫ (уже умножен на число чипов).
@@ -161,6 +161,24 @@ class NorFlashIO:
         self._bypass_broken = False                 # bypass не работает?
         self._erase_suspended = False               # стирание приостановлено?
         self.name = name
+        # ro - микросхема в этом наборе ТОЛЬКО ЧИТАЕТСЯ: её команда стирания
+        # либо отсутствует, либо требует 12 В на Vpp, либо набор её не знает.
+        # Пишем отказ с причиной, а не «пробуем A0h и смотрим».
+        self.ro = bool(ro)
+        self.ro_why = str(ro_why or "")
+
+    # --- отказ от записи ---------------------------------------------------
+    def _readonly(self, action):
+        """(False, почему) для микросхем, которые набор только читает.
+
+        Возвращает None, если запись разрешена. Причина берётся из таблицы
+        геометрии (поле why) - это даташитная формулировка, а не догадка.
+        """
+        if not self.ro:
+            return None
+        why = self.ro_why or "её команды не подтверждены даташитом"
+        return False, (f"{self.name or 'микросхема'}: {action} в этом наборе "
+                       f"не выполняется - {why}")
 
     # --- адреса команд -----------------------------------------------------
 
@@ -420,6 +438,9 @@ class NorFlashProgramming:
         bypass должен быть включён enter_bypass() перед пакетной записью и
         выключен exit_bypass() после.
         """
+        refuse = self._readonly("запись")
+        if refuse:
+            return refuse
         if self.protocol == "intel":
             return self._intel_program(card_off, value)
         if self.wide:
@@ -484,6 +505,9 @@ class NorFlashProgramming:
         0xFF после стирания). Нужен ровно один сценарий - «записать этот
         байт», поэтому значение берётся из card_off, а пара читается заранее.
         """
+        refuse = self._readonly("запись")
+        if refuse:
+            return refuse
         pair_at = card_off - (card_off % 2)
         before = self.read_byte(card_off)
         value = before if value is None else value
@@ -511,6 +535,9 @@ class NorFlashProgramming:
         У Intel 28F/StrataFlash с page > 1 используется буферная запись
         E8h/N/D0h (Intel CUI), у AMD StrataFlash — 25h/D0h (JEDEC).
         """
+        refuse = self._readonly("запись страницы")
+        if refuse:
+            return refuse
         if len(data) > self.page_card:
             return False, f"за один раз не больше {self.page_card} байт"
         if self.page <= 1 or len(data) <= 1:
@@ -837,6 +864,9 @@ class NorFlashErase:
         Если послать одну команду по чётному адресу, второй чип не сотрётся,
         и запись в нечётные байты провалится с «байт не стёрт».
         """
+        refuse = self._readonly("стирание сектора")
+        if refuse:
+            return refuse
         base, _size = self.span(card_off)
         if self.protocol == "intel":
             return self._intel_erase(base)
@@ -866,6 +896,9 @@ class NorFlashErase:
         В таблице 9 документа её нет: только пошаговое стирание блоков.
         Поэтому здесь честный отказ, а не «попробуем 10h и посмотрим».
         """
+        refuse = self._readonly("стирание чипа")
+        if refuse:
+            return refuse
         if self.protocol == "intel":
             return False, ("у Intel 28F008SA нет команды «стереть весь чип»: "
                            "стирать нужно поблочно (это и делает обычная запись)")

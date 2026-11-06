@@ -727,5 +727,7 @@ def make(kit=None, span=MIB, **kw):
                        page=geo.get("page") or 1,
                        bypass=bool(geo.get("bypass")),
                        name=card.chip_name, protocol=card.protocol,
-                       sector_map=geo.get("sectors") or None)
+                       sector_map=geo.get("sectors") or None,
+                       ro=bool(geo.get("ro")),
+                       ro_why=str(geo.get("why") or ""))
     return card, bus, flash

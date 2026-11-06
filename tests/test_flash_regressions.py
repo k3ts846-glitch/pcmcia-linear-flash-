@@ -631,7 +631,7 @@ for name in ("28F010", "28F020", "28F256", "28F512"):
         D.check_sector_map(D.geometry_for(name))
         bad.append("%s: не отказал" % name)
     except D.DirectError as exc:
-        if "bulk erase" not in str(exc):
+        if not ("ВСЕГО чипа" in str(exc) or "bulk erase" in str(exc)):
             bad.append("%s: %s" % (name, str(exc)[:40]))
 check("28F010/020/256/512 (12 В, bulk erase): отказ с объяснением", not bad,
       str(bad[:2]))
@@ -1200,6 +1200,100 @@ try:
 except Exception as exc:                                  # noqa: BLE001
     hung = "за пределами карты" in str(exc)
 check("rd_block: оконная нестыковка даёт ошибку, а не бесконечный цикл", hung)
+
+
+# --- 18. Даташит Intel 28F010 (290207-010): регистр команд, не JEDEC -------
+# Присланный документ (28F010, 128K x 8, ноябрь 1995) описывает ПЕРВОЕ
+# поколение: команды пишутся в регистр команд однобайтовыми циклами
+# (00h чтение массива, 90h ID, 20h+20h стирание ВСЕГО чипа, 40h+PA/PD запись,
+# A0h/C0h проверка, FFh+FFh сброс). Никаких 555h/2AAh, блочного стирания нет,
+# статусного регистра 70h нет, а запись и стирание возможны только при
+# 12 В +-5% на Vpp (при Vpp < 6.5 В микросхема read-only).
+bad = []
+for name, size in (("28F010", 128 << 10), ("28F020", 256 << 10)):
+    geo = D.GEOMETRY.get(name)
+    if not geo:
+        bad.append("%s нет" % name)
+        continue
+    if not geo.get("ro"):
+        bad.append("%s: не помечен ro" % name)
+    if geo.get("protocol") != "intel":
+        bad.append("%s: protocol %s" % (name, geo.get("protocol")))
+    if tuple(geo["cmd"]) != (0, 0):
+        bad.append("%s: cmd %s (ждали (0, 0): JEDEC-адресов у чипа нет)"
+                   % (name, geo["cmd"]))
+    if geo.get("size") != size or geo.get("sector") != size:
+        bad.append("%s: size %s, sector %s (стирается только весь чип)"
+                   % (name, geo.get("size"), geo.get("sector")))
+    if geo.get("volts") != 12:
+        bad.append("%s: volts %s" % (name, geo.get("volts")))
+check("28F010/020: только чтение, CUI, cmd (0,0), сектор = весь чип, 12 В",
+      not bad, str(bad[:3]))
+
+src010 = str((D.GEOMETRY.get("28F010") or {}).get("src") or "")
+needles = ("290207", "B4h", "20h", "12 В")
+miss = [n for n in needles if n not in src010]
+check("28F010: источник - даташит 290207-010, команда 20h, ID B4h, 12 В",
+      not miss, str(miss))
+
+# ID из документа: производитель 89h, устройство B4h
+check("28F010: определяется по ID 89h/B4h",
+      D.chip_name_from_info({"jedec": "89B4"}) == "28F010",
+      D.chip_name_from_info({"jedec": "89B4"}))
+check("28F020 по ID не угадываем (в документе кода нет)",
+      D.chip_name_from_info({"jedec": "89B5"}) != "28F020")
+
+
+class _SilentBus:
+    """Шина-заглушка: команды никуда не идут, читается 0xFF."""
+    limit = 1 << 20
+
+    def rd(self, addr):
+        return 0xFF
+
+    def wr(self, addr, value):
+        pass
+
+    def wr_many(self, addr, data):
+        pass
+
+
+def _flash(name, **kw):
+    geo = D.geometry_for(name)
+    return D.NorFlash(_SilentBus(), chips=1, sector=geo["sector"],
+                      name=name, protocol=geo.get("protocol", "jedec"),
+                      ro=bool(geo.get("ro")),
+                      ro_why=str(geo.get("why") or ""), **kw)
+
+
+ro_flash = _flash("28F010")
+ans = [ro_flash.program_byte(0, 0x5A), ro_flash.program_page(0, b"\x00"),
+       ro_flash.erase_sector(0), ro_flash.erase_chip()]
+bad = []
+for ok, why in ans:
+    if ok:
+        bad.append("не отказал")
+    elif "не выполняется" not in why or "Vpp" not in why:
+        bad.append(why[:50])
+check("28F010: запись/страница/сектор/чип - отказ с причиной (Vpp, только чип)",
+      not bad, str(bad[:2]))
+
+# ... и наоборот: у 5-вольтовой S5 отказа нет, запись идёт
+plain = _flash("28F008S5")
+check("28F008S5: без ro (5 В, есть блочное стирание) - отказа нет",
+      plain.ro is False and plain.program_byte(0, 0xFF)[0], plain.ro_why)
+
+# ro обязан дойти до NorFlash из identify_chip (иначе предохранитель мёртв)
+import inspect
+id_src = inspect.getsource(D.identify_chip)
+check("identify_chip пробрасывает ro/ro_why в результат",
+      "ro=bool(geo.get(\"ro\"))" in id_src and "ro_why" in id_src)
+open_src = inspect.getsource(D._flash_open)
+check("_flash_open передаёт ro в NorFlash",
+      "ro=bool(geo.get(\"ro\"))" in open_src)
+pkg = (pathlib.Path(KIT) / "src" / "pcmcia_flash" / "nor_flash.py").read_text(encoding="utf-8")
+check("пакетный двойник знает про ro (предохранитель в обеих реализациях)",
+      "self.ro = bool(ro)" in pkg and "def _readonly" in pkg)
 
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)

@@ -136,7 +136,9 @@ def _flash_open(args, want_write=True, probe=True):
                      page=geo.get("page") or 1,
                      bypass=bool(geo.get("bypass")),
                      name=geo.get("name", ""), protocol=protocol,
-                     sector_map=geo.get("sectors") or None)
+                     sector_map=geo.get("sectors") or None,
+                     ro=bool(geo.get("ro")),
+                     ro_why=str(geo.get("why") or ""))
     return {"dev": dev, "exca": exca, "wins": wins, "win": win, "mem": mem,
             "bus": bus, "flash": flash, "chips": chips, "size": size,
             "src": src, "geo": geo, "info": info}
