@@ -13,6 +13,11 @@
 протокол, напряжение, поддержка буферной записи и Unlock Bypass.
 """
 
+# Аннотации в этом модуле используют запись `int | None`, которая работает
+# только с Python 3.10. Набор поддерживает 3.9 (см. матрицу CI), поэтому
+# аннотации не вычисляются: иначе импорт модуля падал бы TypeError.
+from __future__ import annotations
+
 from .chip_db import (
     CHIP_GEOMETRY, AMD_PARTS, FUJITSU_PARTS, INTEL_PARTS,
     VPP5, VPP126, PAGE_NONE,
