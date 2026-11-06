@@ -143,6 +143,34 @@ def sector_at(geo: dict, chip_off: int) -> tuple[int, int]:
     return chip_off, 0
 
 
+# Обозначения, которых в даташитах нет (или которые принадлежат другой
+# микросхеме). Их нельзя «достраивать по совпадению»: имя AT29F040 не содержит
+# ни одного нашего ключа, и раньше запрос падал общим «неизвестная микросхема».
+# Подсказка важнее: человек чаще всего видел где-то опечатку в обозначении.
+WRONG_NAMES = {
+    "AT29F040": "у Atmel нет AT29F040: 5-вольтовый флеш с командами JEDEC - это "
+                "AT49F040A (512 КиБ, 16K+2x8K+32K+7x64K); AT29C040A - страничная "
+                "запись без команды стирания 30h",
+    "AT29F040B": "у Atmel нет AT29F040B: см. AT49F040A (512 КиБ, boot-блоки) или "
+                 "AT29C040A (страничная запись, без 30h)",
+    "AT29F016": "у Atmel нет AT29F016: AT29-серия - страничная запись (512/010/"
+                "020/040), AT49F - до 1 МиБ; 16-Мбит часть у Atmel - x16 "
+                "(AT49BV16xx), для байтовой карты не подходит",
+    "AT29F080": "у Atmel нет AT29F080: 1 МиБ байтовая - AT49F080 (стирание только "
+                "чипом, команды Sector Erase нет); AT29C-серия - страничная запись",
+    "SST39VF016": "у SST нет 39VF016: 16-Мбит часть называется SST39VF160, и она "
+                  "x16 (3 В), а не байтовая; байтовые 5-вольтовые - до SST39SF040",
+    "SST39SF016": "у SST нет 39SF016: 5-вольтовая байтовая серия кончается на "
+                  "SST39SF040 (512 КиБ)",
+    "28F002SA": "у Intel нет 28F002SA: 2-Мбит boot-block - 28F002BV/BX (x8/x16), "
+                "байтовое семейство Smart 5 - 28F004S5/28F008S5/28F016S5",
+    "28F004SA": "у Intel нет 28F004SA: 4-Мбит байтовая - 28F004S5 (8 блоков по "
+                "64 КиБ), она же 28F004S3/SC",
+    "M28F016S5": "у ST нет M28F016S5: байтовое семейство Smart 5 выпускала Intel "
+                 "(28F016S5, 5 В, 32 x 64 КиБ)",
+}
+
+
 def geometry_for(name: str, size: int | None = None, volts: int | None = None) -> dict:
     """Параметры микросхемы по имени (или по самому длинному совпадению).
 
@@ -158,6 +186,10 @@ def geometry_for(name: str, size: int | None = None, volts: int | None = None) -
             out["volts"] = volts
         out["name"] = exact_name
         return check_sector_map(out)
+
+    hint = WRONG_NAMES.get(str(name or "").strip().upper())
+    if hint:
+        raise UnsupportedChip(f"микросхема {name}: {hint}.")
 
     if name in CHIP_GEOMETRY:
         return finish(CHIP_GEOMETRY[name], name)

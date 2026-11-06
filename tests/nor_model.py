@@ -21,6 +21,7 @@ pcmcia_direct.py (GEOMETRY) - то есть проверяется ровно т
 """
 import importlib.util
 import os
+import pathlib
 
 MIB = 1 << 20
 CHIP = 2 * MIB          # Am29F016 = 16 Мбит = 2 МиБ
@@ -412,6 +413,26 @@ class ModelCardState:
         return 0 <= off and off + n <= self.chips * self.chip_size
 
 
+_INTEL_IDS = None
+
+
+def _intel_id_from_registry(chip_name):
+    """Код устройства Intel из эталонного реестра (data/jedec_registry.json)."""
+    global _INTEL_IDS
+    if _INTEL_IDS is None:
+        import json
+        path = pathlib.Path(__file__).resolve().parent.parent / "src" / \
+            "pcmcia_flash" / "data" / "jedec_registry.json"
+        try:
+            reg = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _INTEL_IDS = {}
+        else:
+            _INTEL_IDS = {info["chip"].upper(): int(key, 16)
+                          for key, info in (reg.get("Intel") or {}).items()}
+    return _INTEL_IDS.get(str(chip_name).upper())
+
+
 class ModelCardProgramming:
     """Симуляция программирования страницы (AMD-режим A0h + данные)."""
 
@@ -505,6 +526,13 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
         self._dq7_polls_left = 0     # счётчик отложенных чтений с DQ7=1 после D0h
 
     def _id_values(self):
+        # Intel: код берём из эталонного реестра data/jedec_registry.json, а не
+        # из таблиц кода - иначе модель повторит ошибку кода (раньше здесь
+        # стояло 0xA0 для 28F008SA, хотя это код 28F016SV, и выдуманный A1h).
+        if self.chip_name.upper().startswith("28F"):
+            got = _intel_id_from_registry(self.chip_name)
+            if got is not None:
+                return (0x89, got)
         table = {"Am29F016": (0x01, 0xAD), "Am29F032": (0x01, 0x34),
                  "Am29F080": (0x01, 0x58), "Am29F040": (0x01, 0xA4),
                  "Am29LV016": (0x01, 0x49), "28F008SA": (0x89, 0xA0),
@@ -516,7 +544,7 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
                  "Am29F200AB": (0x01, 0x57), "Am29F200AT": (0x01, 0x51),
                  "Am29F080B": (0x01, 0xBA), "Am29LV001BB": (0x01, 0x6D),
                  "Am29LV001BT": (0x01, 0xED),
-                 "28F016SA": (0x89, 0xA1), "MBM29F016": (0x04, 0xAD)}
+                 "MBM29F016": (0x04, 0xAD)}
         return table.get(self.chip_name, (0x01, 0xFF))
 
     def _cfi_bytes(self):

@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.2"          # версия набора: печатается в отчёте и в --selftest
+KIT_VERSION = "2.17.3"          # версия набора: печатается в отчёте и в --selftest
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -2893,17 +2893,17 @@ GEOMETRY = {
                           "Укажите --chip с проверенным именем"),
     # --- Atmel ---
     "AT29C010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=128 << 10, volts=5, bypass=True,
-                     src="Atmel AT29C010: 128 KiB, 5 В (данные по умолчанию)"),
+                     size=128 << 10, volts=5, bypass=True, ambiguous=True,
+                     src="Atmel AT29C010: страничная запись с автостиранием страницы, команды Sector Erase 30h нет - этим набором не стирается; 5-вольтовые JEDEC-микросхемы Atmel - семейство AT49F (AT49F040A)"),
     "AT29C020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=256 << 10, volts=5, bypass=True,
-                     src="Atmel AT29C020: 256 KiB, 5 В (данные по умолчанию)"),
+                     size=256 << 10, volts=5, bypass=True, ambiguous=True,
+                     src="Atmel AT29C020: страничная запись с автостиранием страницы, команды Sector Erase 30h нет - этим набором не стирается; 5-вольтовые JEDEC-микросхемы Atmel - семейство AT49F (AT49F040A)"),
     "AT29C040": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=512 << 10, volts=5, bypass=True,
-                     src="Atmel AT29C040: 512 KiB, 5 В (данные по умолчанию)"),
+                     size=512 << 10, volts=5, bypass=True, ambiguous=True,
+                     src="Atmel AT29C040: страничная запись с автостиранием страницы, команды Sector Erase 30h нет - этим набором не стирается; 5-вольтовые JEDEC-микросхемы Atmel - семейство AT49F (AT49F040A)"),
     "AT29C512": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=64 << 10, volts=5, bypass=True,
-                     src="Atmel AT29C512: 64 KiB, 5 В (данные по умолчанию)"),
+                     size=64 << 10, volts=5, bypass=True, ambiguous=True,
+                     src="Atmel AT29C512: страничная запись с автостиранием страницы, команды Sector Erase 30h нет - этим набором не стирается; 5-вольтовые JEDEC-микросхемы Atmel - семейство AT49F (AT49F040A)"),
     # --- Toshiba ---
     "TC58FVT160": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                        size=2 << 20, volts=5, bypass=True,
@@ -2923,21 +2923,36 @@ GEOMETRY = {
                       size=4 << 20, volts=5, bypass=True,
                       src="Macronix MX29F3210: 4 MiB, 5 В (данные по умолчанию)"),
     # --- SST ---
-    "SST39VF010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=128 << 10, volts=5, bypass=True,
-                       src="SST SST39VF010: 128 KiB, 5 В (данные по умолчанию)"),
-    "SST39VF020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=256 << 10, volts=5, bypass=True,
-                       src="SST SST39VF020: 256 KiB, 5 В (данные по умолчанию)"),
-    "SST39VF040": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+    "SST39VF010": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                       size=128 << 10, volts=3, bypass=True,
+                       src="SST SST39VF010: 128 KiB, 32 секторов по 4 КиБ, 2.7-3.6 В (flashrom sst.c: {4 KiB, 32}; SST DS25022A: uniform 4 KByte sectors)"),
+    "SST39VF020": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                       size=256 << 10, volts=3, bypass=True,
+                       src="SST SST39VF020: 256 KiB, 64 секторов по 4 КиБ, 2.7-3.6 В (flashrom sst.c: {4 KiB, 64}; SST DS25022A: uniform 4 KByte sectors)"),
+    "SST39VF040": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                       size=512 << 10, volts=3, bypass=True,
+                       src="SST SST39VF040: 512 KiB, 128 секторов по 4 КиБ, 2.7-3.6 В (flashrom sst.c: {4 KiB, 128}; SST DS25022A: uniform 4 KByte sectors)"),
+    # 5-вольтовый близнец SST39VF040 (SST DS25022A: uniform 4 KByte sectors).
+    "SST39SF040": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                        size=512 << 10, volts=5, bypass=True,
-                       src="SST SST39VF040: 512 KiB, 5 В (данные по умолчанию)"),
-    "SST39VF080": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=1 << 20, volts=5, bypass=True,
-                       src="SST SST39VF080: 1 MiB, 5 В (данные по умолчанию)"),
+                       src="SST SST39SF040: 512 KiB, 128 секторов по 4 КиБ, 5 В "
+                           "(SST DS25022A; flashrom sst.c: {4 KiB, 128})"),
+    "SST39VF080": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                       size=1 << 20, volts=3, bypass=True,
+                       src="SST SST39VF080: 1 MiB, 256 секторов по 4 КиБ, 2.7-3.6 В (flashrom sst.c: {4 KiB, 256}; SST DS25022A: uniform 4 KByte sectors)"),
     # --- Intel 28F-серия (CUI-протокол) ---
     # По datasheet: 28F008SA — sixteen 64-Kbyte blocks (1 MByte),
     # 28F016SA — thirty-two 64-KB blocks (2 MByte).
+    # Байтовое семейство Smart 5 FlashFile 4/8/16 Мбит (даташит Intel):
+    # «4 Mbit: Eight Blocks - 8 Mbit: Sixteen Blocks - 16 Mbit: Thirty-Two
+    # Blocks», все блоки по 64 КиБ, 5 В, x8. ID: A7h/A6h (flashrom: 28F004S3/
+    # S5/SC, ядро Linux jedec_probe.c: I28F008S5 = A6h).
+    "28F004S5": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=False,
+                     size=512 << 10, volts=5, protocol="intel",
+                     src="Intel 28F004S5: байтовая Smart 5, 8 x 64 КиБ, 5 В"),
+    "28F008S5": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=False,
+                     size=1 << 20, volts=5, protocol="intel",
+                     src="Intel 28F008S5: байтовая Smart 5, 16 x 64 КиБ, 5 В"),
     "28F008SA": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=True,
                      size=1 << 20, volts=12, protocol="intel",
                      src="Intel 28F008SA: CUI, 16 блоков по 64 КиБ, Vpp 12 В"),
@@ -2948,16 +2963,27 @@ GEOMETRY = {
     # Symmetrical Erase Block Architecture ... 16 Mbit: Thirty-Two Blocks».
     # Прежние 128 КиБ давали ложный отказ blank-check и запись через границу
     # блока: стирался один 64-КиБ блок, а писалось два.
-    "28F016S5": dict(sector=64 << 10, page=32, cmd=(0, 0), wide=True,
-                     size=2 << 20, volts=12, protocol="intel",
-                     src="Intel 28F016S5: CUI, 32 x 64 КиБ, Vpp 12 В, буфер 25h/D0h (32 байта/чип)"),
+    # Даташит Intel «BYTE-WIDE SMART 5 FlashFile MEMORY FAMILY 4, 8, AND 16 MBIT»:
+    # «16 Mbit: Thirty-Two Blocks», 5 В (Vpp 5 или 12 В). Микросхема БАЙТОВАЯ -
+    # команда CUI пишется одним байтом, поэтому wide=False. Буфер 25h/D0h не
+    # используем: это команда AMD StrataFlash, в CUI Intel её нет, а писать
+    # неизвестную команду в микросхему с паспортом карты внутри нельзя.
+    # Пишем по байту командой 40h - медленнее, зато точно по даташиту.
+    "28F016S5": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=False,
+                     size=2 << 20, volts=5, protocol="intel",
+                     src="Intel 28F016S5: байтовая Smart 5 FlashFile, CUI, "
+                         "32 x 64 КиБ, 5 В; буфер не используется"),
     "28F320": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=True,
                    size=4 << 20, volts=3, protocol="intel",
                    src="Intel 28F320: CUI, 3 В"),
-    "M28F016S5": dict(sector=64 << 10, page=32, cmd=(0, 0), wide=True,
-                      size=2 << 20, volts=12, protocol="intel",
-                      src="ST M28F016S5: 32 x 64 КиБ (как Intel 28F016S5), "
-                          "Vpp 12 В, буфер 25h/D0h (32 байта/чип)"),
+    # Обозначения M28F016S5 у ST не найдено: байтовое семейство FlashFile
+    # выпускала Intel (28F004S5/008S5/016S5), у ST были M28F008/M28F016 (12 В)
+    # и M28F102. Пока даташита нет - отказ, а не «как у Intel».
+    "M28F016S5": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=False,
+                      size=2 << 20, volts=5, protocol="intel", ambiguous=True,
+                      src="ST M28F016S5: такого обозначения в даташитах ST нет; "
+                          "байтовое семейство FlashFile - это Intel 28F016S5 "
+                          "(5 В, 32 x 64 КиБ): укажите --chip 28F016S5"),
     # --- AMD/Fujitsu StrataFlash (Am29PL/DL/GL, MBM29DL/GL) ---
     # Буферная запись 25h/D0h, JEDEC-протокол, DQ7/DQ5 опрос, 5 В или 3 В.
     "Am29PL320": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
@@ -3142,6 +3168,50 @@ def sector_at(geo, chip_off):
     return chip_off, 0
 
 
+# Обозначения, которых в даташитах нет (или которые принадлежат другой
+# микросхеме). Раньше они молча получали «умолчания как у Am29F016»: 64 КиБ
+# сектор, 2 МиБ - то есть на boot-чипе первое же стирание задело бы 16K+8K+8K+
+# 32K. Теперь это отказ с подсказкой, какое имя указать.
+WRONG_NAMES = {
+    "AT29F040": "у Atmel нет AT29F040: 5-вольтовый флеш с командами JEDEC - это "
+                "AT49F040A (512 КиБ, 16K+2x8K+32K+7x64K); AT29C040A - страничная "
+                "запись без команды стирания 30h",
+    "AT29F040B": "у Atmel нет AT29F040B: см. AT49F040A (512 КиБ, boot-блоки) или "
+                 "AT29C040A (страничная запись, без 30h)",
+    "AT29F016": "у Atmel нет AT29F016: AT29-серия - страничная запись (512/010/"
+                "020/040), AT49F - до 1 МиБ; 16-Мбит часть у Atmel - x16 "
+                "(AT49BV16xx), для байтовой карты не подходит",
+    "AT29F080": "у Atmel нет AT29F080: 1 МиБ байтовая - AT49F080 (стирание только "
+                "чипом, команды Sector Erase нет); AT29C-серия - страничная запись",
+    "SST39VF016": "у SST нет 39VF016: 16-Мбит часть называется SST39VF160, и она "
+                  "x16 (3 В), а не байтовая; байтовые 5-вольтовые - до SST39SF040",
+    "SST39SF016": "у SST нет 39SF016: 5-вольтовая байтовая серия кончается на "
+                  "SST39SF040 (512 КиБ)",
+    "28F002SA": "у Intel нет 28F002SA: 2-Мбит boot-block - 28F002BV/BX (x8/x16), "
+                "байтовое семейство Smart 5 - 28F004S5/28F008S5/28F016S5",
+    "28F004SA": "у Intel нет 28F004SA: 4-Мбит байтовая - 28F004S5 (8 блоков по "
+                "64 КиБ), она же 28F004S3/SC",
+    "M28F016S5": "у ST нет M28F016S5: байтовое семейство Smart 5 выпускала Intel "
+                 "(28F016S5, 5 В, 32 x 64 КиБ)",
+}
+
+
+def name_known(name):
+    """Есть ли имя в таблице (точно или как самое длинное совпадение)."""
+    key = str(name or "").strip()
+    if not key:
+        return False
+    if key in GEOMETRY:
+        return True
+    up = key.upper()
+    return any(len(n) >= 5 and n.upper() in up for n in GEOMETRY)
+
+
+def wrong_name_hint(name):
+    """Подсказка для обозначения, которого нет в даташитах (или '')."""
+    return WRONG_NAMES.get(str(name or "").strip().upper(), "")
+
+
 def geometry_for(name, size=None, volts=None):
     """Параметры микросхемы по имени: сектор, адреса/ширина команды, вольты.
 
@@ -3163,6 +3233,9 @@ def geometry_for(name, size=None, volts=None):
 
     if not name:
         return base
+    hint = wrong_name_hint(name)
+    if hint:
+        raise DirectError("микросхема " + str(name) + ": " + hint + ".")
     key = str(name).strip()
     if key in GEOMETRY:
         g = dict(base)
@@ -3201,10 +3274,14 @@ def chip_name_from_info(info):
         part = vendor_part(vid, did)
         if part:
             return part[0]
-    if vid == 0x89 and did == 0xA2:
-        return "28F008SA"
-    if vid == 0x89 and did == 0xA1:
-        return "28F016SA"
+    # Коды Intel: 0xA2 = 28F008SA (flashrom и ядро), 0xA0 = 28F016SV
+    # («28F016SA/SV» по flashrom; ядро читает тот же A0h как 28F016S5 - у них
+    # одна раскладка), 0xA6 = 28F008S5, 0xA7 = 28F004S5. Кода A1h в этих
+    # таблицах нет, поэтому прежнее «A1h = 28F016SA» убрано: угадывать нельзя.
+    intel_ids = {0xA0: "28F016SV", 0xA2: "28F008SA", 0xA6: "28F008S5",
+                 0xA7: "28F004S5"}
+    if vid == 0x89 and did in intel_ids:
+        return intel_ids[did]
     prod = " ".join((info or {}).get("product") or []).upper()
     for name in list(GEOMETRY) + ["28F008SA", "28F016SA"]:
         if name.upper() in prod:
@@ -3224,6 +3301,14 @@ def identify_chip(flash, info=None, force=None, progress=None):
     if progress:
         progress("определяю микросхему: паспорт")
     name = (force or chip_name_from_info(info or {}) or "").strip()
+    if force and not name_known(force):
+        hint = wrong_name_hint(force)
+        raise DirectError(
+            "микросхема " + str(force) + ": в таблице такого имени нет"
+            + (" — " + hint if hint else "")
+            + ". Опечатка в --chip опаснее отказа: умолчания (64 КиБ, 2 МиБ) на "
+              "boot-чипе задели бы 16K+8K+8K+32K. Список имён: --chip ? или "
+              "--list-chips.")
     how = "паспорт карты" if name else "имя не определено"
     size = 0
     devs = (info or {}).get("devices") or []

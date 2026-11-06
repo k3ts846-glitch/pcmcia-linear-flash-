@@ -650,35 +650,20 @@
       "manuf": "Fujitsu",
       "notes": "128 Mbit, StrataFlash-аналог"
     },
-    "28F002SA": {
-      "jedec_id": "0xB5",
-      "size_kib": 256,
-      "sector_kib": 64,
-      "cmd_addr1": "0x5555",
-      "cmd_addr2": "0x2aaa",
-      "wide": true,
-      "page": null,
-      "bypass": false,
-      "strata": false,
-      "protocol": "intel",
-      "volts": 12,
-      "manuf": "Intel",
-      "notes": "2 Mbit, CUI, Vpp 12V"
-    },
-    "28F004SA": {
-      "jedec_id": "0xB6",
+    "28F004S5": {
+      "jedec_id": "0xA7",
       "size_kib": 512,
       "sector_kib": 64,
       "cmd_addr1": "0x5555",
       "cmd_addr2": "0x2aaa",
-      "wide": true,
+      "wide": false,
       "page": null,
       "bypass": false,
       "strata": false,
       "protocol": "intel",
-      "volts": 12,
+      "volts": 5,
       "manuf": "Intel",
-      "notes": "4 Mbit, CUI, Vpp 12V"
+      "notes": "4 Mbit, 8 блоков по 64 КиБ, байтовая, 5 В. ID A7h: flashrom (28F004S3/S5/SC)"
     },
     "28F008SA": {
       "jedec_id": "0xA2",
@@ -695,8 +680,23 @@
       "manuf": "Intel",
       "notes": "8 Mbit, CUI, Vpp 12V"
     },
+    "28F008S5": {
+      "jedec_id": "0xA6",
+      "size_kib": 1024,
+      "sector_kib": 64,
+      "cmd_addr1": "0x5555",
+      "cmd_addr2": "0x2aaa",
+      "wide": false,
+      "page": null,
+      "bypass": false,
+      "strata": false,
+      "protocol": "intel",
+      "volts": 5,
+      "manuf": "Intel",
+      "notes": "8 Mbit, 16 блоков по 64 КиБ, байтовая, 5 В. ID A6h: ядро Linux jedec_probe.c (I28F008S5), flashrom (28F008S3/S5/SC)"
+    },
     "28F016SA": {
-      "jedec_id": "0xA1",
+      "jedec_id": null,
       "size_kib": 2048,
       "sector_kib": 64,
       "cmd_addr1": "0x5555",
@@ -708,10 +708,10 @@
       "protocol": "intel",
       "volts": 12,
       "manuf": "Intel",
-      "notes": "16 Mbit, CUI, Vpp 5/12V"
+      "notes": "16 Mbit, CUI, Vpp 12 В. ID не задан: flashrom относит A0h сразу к 28F016SA/SV, а ядро Linux — к 28F016S5; угадывать не будем"
     },
     "28F016SV": {
-      "jedec_id": "0xA6",
+      "jedec_id": "0xA0",
       "size_kib": 2048,
       "sector_kib": 64,
       "cmd_addr1": "0x5555",
@@ -723,7 +723,7 @@
       "protocol": "intel",
       "volts": 5,
       "manuf": "Intel",
-      "notes": "16 Mbit, CUI, 3.3/5V"
+      "notes": "16 Mbit, CUI, 5 В. ID A0h — flashrom flashchips.h (INTEL_28F016SV «28F016SA/SV»)"
     },
     "28F016S5": {
       "jedec_id": null,
@@ -731,94 +731,19 @@
       "sector_kib": 64,
       "cmd_addr1": "0x5555",
       "cmd_addr2": "0x2aaa",
-      "wide": true,
-      "page": 32,
+      "wide": false,
+      "page": null,
       "bypass": false,
-      "strata": true,
+      "strata": false,
       "protocol": "intel",
-      "volts": 12,
+      "volts": 5,
       "manuf": "Intel",
-      "notes": "16 Mbit, StrataFlash, CUI, Vpp 12V"
-    },
-    "M28F016S5": {
-      "jedec_id": null,
-      "size_kib": 2048,
-      "sector_kib": 64,
-      "cmd_addr1": "0x5555",
-      "cmd_addr2": "0x2aaa",
-      "wide": true,
-      "page": 32,
-      "bypass": false,
-      "strata": true,
-      "protocol": "intel",
-      "volts": 12,
-      "manuf": "ST",
-      "notes": "16 Mbit, StrataFlash, CUI, Vpp 12V"
-    },
-    "AT29F040": {
-      "jedec_id": null,
-      "size_kib": 512,
-      "sector_kib": 64,
-      "cmd_addr1": "0x555",
-      "cmd_addr2": "0x2aa",
-      "wide": false,
-      "page": null,
-      "bypass": false,
-      "strata": false,
-      "protocol": "jedec",
-      "volts": 5,
-      "manuf": "Atmel",
-      "notes": "4 Mbit"
-    },
-    "AT29F016": {
-      "jedec_id": null,
-      "size_kib": 2048,
-      "sector_kib": 64,
-      "cmd_addr1": "0x555",
-      "cmd_addr2": "0x2aa",
-      "wide": false,
-      "page": null,
-      "bypass": false,
-      "strata": false,
-      "protocol": "jedec",
-      "volts": 5,
-      "manuf": "Atmel",
-      "notes": "16 Mbit"
-    },
-    "AT29F080": {
-      "jedec_id": null,
-      "size_kib": 1024,
-      "sector_kib": 64,
-      "cmd_addr1": "0x555",
-      "cmd_addr2": "0x2aa",
-      "wide": false,
-      "page": null,
-      "bypass": false,
-      "strata": false,
-      "protocol": "jedec",
-      "volts": 5,
-      "manuf": "Atmel",
-      "notes": "8 Mbit"
-    },
-    "AT29F040B": {
-      "jedec_id": null,
-      "size_kib": 512,
-      "sector_kib": 64,
-      "cmd_addr1": "0x555",
-      "cmd_addr2": "0x2aa",
-      "wide": false,
-      "page": null,
-      "bypass": false,
-      "strata": false,
-      "protocol": "jedec",
-      "volts": 5,
-      "manuf": "Atmel",
-      "notes": "4 Mbit"
+      "notes": "16 Mbit, 32 блока по 64 КиБ, 5 В (Vpp 5 или 12 В). Даташит Intel «BYTE-WIDE SMART 5 FlashFile MEMORY FAMILY 4, 8, AND 16 MBIT»: «16 Mbit: Thirty-Two Blocks». Микросхема БАЙТОВАЯ — команда пишется байтом. Буфером 25h/D0h не пользуемся: это команда AMD StrataFlash, в CUI Intel её нет; пишем по байту 40h. ID не задан: ядро Linux jedec_probe.c читает A0h, flashrom относит AAh к 28F016S3/S5/SC"
     },
     "SST39VF040": {
       "jedec_id": null,
       "size_kib": 512,
-      "sector_kib": 64,
+      "sector_kib": 4,
       "cmd_addr1": "0x555",
       "cmd_addr2": "0x2aa",
       "wide": false,
@@ -826,29 +751,14 @@
       "bypass": false,
       "strata": false,
       "protocol": "jedec",
-      "volts": 5,
+      "volts": 3,
       "manuf": "SST",
-      "notes": "4 Mbit"
-    },
-    "SST39VF016": {
-      "jedec_id": null,
-      "size_kib": 2048,
-      "sector_kib": 64,
-      "cmd_addr1": "0x555",
-      "cmd_addr2": "0x2aa",
-      "wide": false,
-      "page": null,
-      "bypass": false,
-      "strata": false,
-      "protocol": "jedec",
-      "volts": 5,
-      "manuf": "SST",
-      "notes": "16 Mbit"
+      "notes": "4 Mbit, 512K x8, 128 секторов по 4 КиБ, 2.7–3.6 В (flashrom sst.c: {4 KiB, 128}); 5 В — это SST39SF040"
     },
     "SST39SF040": {
       "jedec_id": null,
       "size_kib": 512,
-      "sector_kib": 64,
+      "sector_kib": 4,
       "cmd_addr1": "0x555",
       "cmd_addr2": "0x2aa",
       "wide": false,
@@ -858,22 +768,7 @@
       "protocol": "jedec",
       "volts": 5,
       "manuf": "SST",
-      "notes": "4 Mbit"
-    },
-    "SST39SF016": {
-      "jedec_id": null,
-      "size_kib": 2048,
-      "sector_kib": 64,
-      "cmd_addr1": "0x555",
-      "cmd_addr2": "0x2aa",
-      "wide": false,
-      "page": null,
-      "bypass": false,
-      "strata": false,
-      "protocol": "jedec",
-      "volts": 5,
-      "manuf": "SST",
-      "notes": "16 Mbit"
+      "notes": "4 Mbit, 512K x8, 128 секторов по 4 КиБ (SST DS25022A «uniform 4 KByte sectors»), 5 В. Прежние 64 КиБ заставляли стирать в 16 раз больше нужного"
     },
     "MX29F040": {
       "jedec_id": null,
@@ -1035,29 +930,21 @@
       "notes": "4 Mbit, bottom-boot: 11 блоков = 16K + 2x8K + 32K + 7x64K; код 00D6h при вендоре 0020h"
     }  },
   "vpp5": [
-    "Am29F016", "Am29F800BB", "Am29F400AB", "Am29F040", "Am29F200AB", "Am29F010",
-    "Am29F032B", "Am29F080", "Am29F080B", "Am29F017D", "Am29F200AT", "Am29F400AT", "Am29F800BT",
-    "Am29LV016", "Am29LV001BB", "Am29LV001BT", "Am29LV040B", "Am29LV400BB", "Am29LV400BT",
-    "Am29LV800BB", "Am29LV800BT", "Am29LV160DT", "Am29LV160DB",
-    "Am29DL322", "Am29DL323", "Am29DL642", "Am29DL643",
-    "Am29GL064", "Am29GL128", "Am29GL256", "Am29GL512", "Am29GL1024",
-    "Am29PL320", "Am29PL640", "Am29PL1280",
-    "MBM29F016", "MBM29F040C", "MBM29F002TC", "MBM29F002BC",
-    "MBM29F004TC", "MBM29F004BC", "M29F002BT", "M29F002BB",
-    "M29F400BT", "M29F400BB",
-    "MBM29DL322", "MBM29DL642", "MBM29GL064", "MBM29GL128",
-    "HN28F010", "HN28F020", "HN28F100",
-    "M5M29F010", "M5M29F020",
-    "MX29F1610", "MX29F3210",
-    "SST39VF010", "SST39VF020", "SST39VF040", "SST39VF080",
-    "TC58FVT160", "TC58FVT320",
-    "AT29F016", "AT29F040", "AT29F080", "AT29F040B"
+    "vpp5", "Am29F016", "Am29F800BB", "Am29F400AB", "Am29F040", "Am29F200AB",
+    "Am29F010", "Am29F032B", "Am29F080", "Am29F080B", "Am29F017D", "Am29F200AT",
+    "Am29F400AT", "Am29F800BT", "Am29LV016", "Am29LV001BB", "Am29LV001BT", "Am29LV040B",
+    "Am29LV400BB", "Am29LV400BT", "Am29LV800BB", "Am29LV800BT", "Am29LV160DT", "Am29LV160DB",
+    "Am29DL322", "Am29DL323", "Am29DL642", "Am29DL643", "Am29GL064", "Am29GL128",
+    "Am29GL256", "Am29GL512", "Am29GL1024", "Am29PL320", "Am29PL640", "Am29PL1280",
+    "MBM29F016", "MBM29F040C", "MBM29F002TC", "MBM29F002BC", "MBM29F004TC", "MBM29F004BC",
+    "M29F002BT", "M29F002BB", "M29F400BT", "M29F400BB", "MBM29DL322", "MBM29DL642",
+    "MBM29GL064", "MBM29GL128", "HN28F010", "HN28F020", "HN28F100", "M5M29F010",
+    "M5M29F020", "MX29F1610", "MX29F3210", "SST39VF010", "SST39VF020", "SST39VF040",
+    "SST39VF080", "TC58FVT160", "TC58FVT320", "28F004S5", "28F008S5", "28F016S5"
   ],
   "vpp126": [
-    "Am28F256", "Am28F512", "Am28F010", "Am28F020",
-    "28F256", "28F512", "28F010", "28F020",
-    "D28F010", "D28F020", "LH28F010", "LH28F020",
-    "M28F008", "M28F016", "M28F102",
-    "28F002SA", "28F004SA", "28F008SA", "28F016SA"
+    "vpp126", "Am28F256", "Am28F512", "Am28F010", "Am28F020", "28F256",
+    "28F512", "28F010", "28F020", "D28F010", "D28F020", "LH28F010",
+    "LH28F020", "M28F008", "M28F016", "M28F102", "28F008SA", "28F016SA"
   ]
 }

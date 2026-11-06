@@ -437,6 +437,131 @@ for name, off, size in (("MBM29F002BC", 0x00000, 16 << 10),
           ok and flash.read(off, size) == b"\xff" * size, why)
 
 
+# --- 9. Аудит таблицы: SST 4 КиБ, Intel Smart 5, реестр ID -----------------
+# Сверено с независимыми источниками:
+#   * SST DS25022A / flashrom flashchips/sst.c: у SST39SF/VF040 и младших
+#     «uniform 4 KByte sectors» (flashrom: {4 KiB, 128}), 39VF — 2.7-3.6 В;
+#   * Intel «BYTE-WIDE SMART 5 FlashFile MEMORY FAMILY 4, 8, AND 16 MBIT»:
+#     4/8/16 Мбит = 8/16/32 блока по 64 КиБ, x8, 5 В (Vpp 5 или 12 В);
+#   * flashrom flashchips.h + ядро drivers/mtd/chips/jedec_probe.c: коды Intel
+#     A0h = 28F016SA/SV (ядро: 28F016S5), A2h = 28F008SA, A6h = 28F008S5,
+#     A7h = 28F004S5; а B5h/B6h - это SST39SF010A/020A, не Intel.
+section("аудит таблицы: SST, Intel Smart 5, реестр ID")
+
+bad = []
+for name, count in (("SST39SF040", 128), ("SST39VF040", 128)):
+    for where, table in (("пакет", C.CHIP_GEOMETRY), ("монолит", D.GEOMETRY)):
+        geo = table.get(name)
+        if not geo:
+            bad.append("%s нет в %s" % (name, where))
+        elif C.sector_map(geo) != [(4096, count)] or geo["size"] != 512 << 10:
+            bad.append("%s/%s: %s" % (name, where, C.sector_map(geo)))
+check("SST39SF040 и SST39VF040: 128 секторов по 4 КиБ (а не 64 КиБ)", not bad,
+      str(bad[:3]))
+
+bad = []
+for name, count, volts in (("SST39VF010", 32, 3), ("SST39VF020", 64, 3),
+                           ("SST39VF080", 256, 3)):
+    geo = D.GEOMETRY.get(name) or {}
+    if C.sector_map(geo) != [(4096, count)] or geo.get("volts") != volts:
+        bad.append((name, C.sector_map(geo), geo.get("volts")))
+check("монолит: SST39VF010/020/080 тоже по 4 КиБ и 2.7-3.6 В", not bad, str(bad))
+
+bad = []
+for where, geo in (("пакет", C.CHIP_GEOMETRY.get("28F016S5") or {}),
+                   ("монолит", D.GEOMETRY.get("28F016S5") or {})):
+    if (not geo or geo.get("wide") or geo.get("volts") != 5
+            or int(geo.get("page") or 1) != 1
+            or C.sector_map(geo) != [(65536, 32)]):
+        bad.append((where, geo.get("wide"), geo.get("volts"), geo.get("page")))
+check("28F016S5: байтовая (wide=False), 5 В, без буфера 25h/D0h, 32 x 64 КиБ",
+      not bad, str(bad))
+
+bad = []
+for name, count, size in (("28F004S5", 8, 512 << 10), ("28F008S5", 16, 1 << 20)):
+    for where, table in (("пакет", C.CHIP_GEOMETRY), ("монолит", D.GEOMETRY)):
+        geo = table.get(name)
+        if not geo:
+            bad.append("%s нет в %s" % (name, where))
+        elif C.sector_map(geo) != [(65536, count)] or geo["size"] != size:
+            bad.append("%s/%s: %s" % (name, where, C.sector_map(geo)))
+check("28F004S5 / 28F008S5: 8 и 16 блоков по 64 КиБ, 5 В, байтовые", not bad,
+      str(bad[:3]))
+
+want_intel = {0xA0: "28F016SV", 0xA2: "28F008SA", 0xA6: "28F008S5", 0xA7: "28F004S5"}
+got_intel = {k: v[0] for k, v in C.INTEL_PARTS.items()}
+check("Intel ID по двум источникам: A0h/A2h/A6h/A7h, без выдуманных A1h/B5h/B6h",
+      got_intel == want_intel, str(got_intel))
+
+# Реестр в JSON и модуль jedec_registry.py не должны разъезжаться: раньше
+# правки делались в одном из двух мест, и «эталон» подтверждал сам себя.
+import json as _json
+_reg_json = _json.loads((pathlib.Path(KIT) / "src" / "pcmcia_flash" / "data" /
+                         "jedec_registry.json").read_text(encoding="utf-8"))
+_reg_py = __import__("pcmcia_flash.jedec_registry", fromlist=["x"])
+drift = []
+for vendor, table in (("AMD", _reg_py.AMD_ETALON), ("Fujitsu", _reg_py.FUJITSU_ETALON),
+                      ("Intel", _reg_py.INTEL_ETALON)):
+    js = {int(k, 16): v["chip"] for k, v in (_reg_json.get(vendor) or {}).items()}
+    py = {k: v[0] for k, v in table.items()}
+    if js != py:
+        drift.append((vendor, sorted(js.items() ^ py.items())[:4]))
+check("реестр jedec_registry.json и jedec_registry.py совпадают", not drift,
+      str(drift))
+
+# Обозначения, которых нет в даташитах: отказ с подсказкой в обеих таблицах.
+wrong = ("AT29F040", "AT29F040B", "AT29F016", "AT29F080",
+         "SST39VF016", "SST39SF016", "28F002SA", "28F004SA", "M28F016S5")
+bad = []
+for name in wrong:
+    for where, fn, err in (("пакет", C.geometry_for, C.UnsupportedChip),
+                           ("монолит", D.geometry_for, D.DirectError)):
+        try:
+            fn(name)
+            bad.append("%s/%s: не отказал" % (name, where))
+        except err as exc:
+            if "нет" not in str(exc):
+                bad.append("%s/%s: %s" % (name, where, str(exc)[:50]))
+        except Exception as exc:                    # noqa: BLE001
+            bad.append("%s/%s: %s" % (name, where, type(exc).__name__))
+check("9 несуществующих обозначений отвергаются с подсказкой", not bad,
+      str(bad[:3]))
+
+# AT29C: у семейства нет команды Sector Erase (страничная запись), поэтому
+# монолит отказывает, а не шлёт 30h в никуда.
+try:
+    D.check_sector_map(D.geometry_for("AT29C010"))
+    ok29 = False
+except D.DirectError as exc:
+    ok29 = "30h" in str(exc)
+check("AT29C010: отказ «команды Sector Erase 30h нет»", ok29)
+
+# Опечатка в --chip не должна молча давать «умолчания как у Am29F016».
+try:
+    D.identify_chip(None, {}, force="XX4234")
+    typo = False
+except D.DirectError as exc:
+    typo = "Опечатка" in str(exc)
+check("--chip с опечаткой: отказ, а не умолчания (64 КиБ / 2 МиБ)", typo)
+
+# Модель берёт код Intel из эталона, а не «на память».
+check("модель: 28F008SA = 89h:A2h, 28F016SV = 89h:A0h",
+      NM._intel_id_from_registry("28F008SA") == 0xA2
+      and NM._intel_id_from_registry("28F016SV") == 0xA0,
+      str((NM._intel_id_from_registry("28F008SA"),
+           NM._intel_id_from_registry("28F016SV"))))
+
+# 4-КиБ сектор стирается ровно один: соседний байт цел.
+card, _bus, flash = NM.make(kit=KIT, chips=1, chip_name="SST39VF040", blank=False)
+img = bytes((i * 7 + 3) & 0xFF for i in range(512 << 10))
+card.mem[0][:] = img
+ok, why = flash.erase_sector(3 * flash.sector)
+check("SST39VF040: стирается один 4-КиБ сектор, соседний цел",
+      ok and flash.read(3 * flash.sector, 16) == b"\xff" * 16
+      and flash.read(2 * flash.sector, 8) == img[2 * flash.sector:2 * flash.sector + 8],
+      why)
+
+
 # Две реализации должны говорить об одном и том же: пакет и монолит -
 # независимые копии, и именно так они разошлись (28F016S5: 128 КиБ против
 # 64 КиБ, дело дошло до ложного отказа blank-check).
