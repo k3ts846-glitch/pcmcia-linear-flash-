@@ -17,10 +17,13 @@ CFI со сдвигом на байт), поэтому «231 проверка п
 
 Запуск: python3 tests/test_flash_regressions.py   (карта и /dev/mem не нужны)
 """
+import contextlib as _ctx
+import io as _io
 import os
 import pathlib
 import sys
 import tempfile
+import types as _types
 
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, KIT)
@@ -649,6 +652,74 @@ junk = [(key, [x for x in raw.get(key, []) if x in ("vpp5", "vpp126")])
         for key in ("vpp5", "vpp126")]
 junk = [(k, v) for k, v in junk if v]
 check("vpp5/vpp126 не содержат собственных имён", not junk, str(junk))
+
+
+# --- 12. Третий заход аудита: MX29F1610 (сектор 128 КиБ) и честные пометки ---
+# Даташит Macronix MX29F1610 (16M-BIT [2Mx8/1Mx16], 5 В +-10%): «Sector erase
+# architecture - 16 equal sectors of 128k bytes each», страница 128 байт. В
+# таблице стояло «сектор 64 КиБ» - такое стирание снесло бы соседние 64 КиБ
+# того же блока. Проверяем и саму строку, и то, что страж ловит прежнюю
+# раскладку на модели с ЖЕЛЕЗНЫМИ 128-КиБ блоками.
+section("MX29F1610: сектор 128 КиБ, и страж против прежней таблицы")
+
+mx = D.GEOMETRY["MX29F1610"]
+check("MX29F1610: 2 МиБ, сектор 128 КиБ, карта 16 x 128 КиБ",
+      mx["size"] == 2 << 20 and mx["sector"] == 128 << 10
+      and D.sector_map(mx) == [(131072, 16)],
+      str((mx["size"], mx["sector"], D.sector_map(mx))))
+check("MX29F1610: 5 В и не помечен отказом",
+      mx["volts"] == 5 and not mx.get("ambiguous") and not mx.get("unverified"))
+
+MX_IMG = bytes((i * 11 + 5) & 0xFF for i in range(2 << 20))
+card, _bus, flash = NM.make(kit=KIT, chips=1, chip_name="MX29F1610", blank=False)
+card.mem[0][:] = MX_IMG
+ok, why = D._erase_sector_guarded(flash, 0x20000)
+check("MX29F1610: верная таблица - стёрт блок 128 КиБ, соседи целы",
+      ok and flash.read(0x20000, 16) == b"\xff" * 16
+      and flash.read(0x1FFFF, 1) == b"\xfa" and flash.read(0x40000, 1) == b"\x05",
+      (ok, why[:70]))
+
+card, _bus, flash = NM.make(kit=KIT, chips=1, chip_name="MX29F1610", blank=False)
+card.mem[0][:] = MX_IMG
+flash.sector = 64 << 10           # прежняя таблица: 64 КиБ при блоке 128 КиБ
+flash.sector_map = None
+ok, why = D._erase_sector_guarded(flash, 0x20000)
+check("MX29F1610: прежние 64 КиБ - отказ, сосед назван",
+      (not ok) and "БОЛЬШЕ" in why and "0x30000" in why, why[:90])
+
+# Строки, которых нет ни в одном из двух источников (flashrom flashchips.h и
+# ядро jedec_probe.c) и под которые не нашлось даташита, обязаны быть помечены
+# честно: чип работает, но отчёт предупреждает, а src говорит, что сверки нет.
+UNVERIFIED = {"D28F010", "D28F020", "HN28F010", "HN28F020", "HN28F100",
+              "LH28F010", "LH28F020", "M28F008", "M28F016",
+              "M5M29F010", "M5M29F020", "MX29F3210"}
+got = {n for n, g in D.GEOMETRY.items() if g.get("unverified")}
+check("помечены «не сверено» ровно %d строк" % len(UNVERIFIED),
+      got == UNVERIFIED, str(sorted(got ^ UNVERIFIED)))
+dishonest = [n for n in sorted(UNVERIFIED)
+             if "не сверен" not in (D.GEOMETRY[n].get("src") or "")]
+check("у каждой непроверенной строки src говорит о недосверке",
+      not dishonest, str(dishonest))
+both = [n for n in sorted(UNVERIFIED) if D.GEOMETRY[n].get("ambiguous")]
+check("непроверенная строка не выдаёт себя за отказ", not both, str(both))
+
+_geo = D.geometry_for("HN28F010", size=128 << 10)
+_buf = _io.StringIO()
+with _ctx.redirect_stdout(_buf):
+    D._flash_report({"geo": _geo, "chips": 1, "size": 128 << 10, "how": "тест",
+                     "win": {"start": 0xC0000, "size": 4 << 20},
+                     "bus": _types.SimpleNamespace(span=8192)})
+check("непроверенная строка: отчёт печатает ВНИМАНИЕ",
+      "ВНИМАНИЕ" in _buf.getvalue() and "не сверены" in _buf.getvalue(),
+      _buf.getvalue()[:120])
+
+_buf = _io.StringIO()
+with _ctx.redirect_stdout(_buf):
+    D._flash_report({"geo": D.geometry_for("MX29F1610", size=2 << 20),
+                     "chips": 1, "size": 2 << 20, "how": "тест",
+                     "win": {"start": 0xC0000, "size": 4 << 20},
+                     "bus": _types.SimpleNamespace(span=8192)})
+check("сверенная строка: ВНИМАНИЯ нет", "ВНИМАНИЕ" not in _buf.getvalue())
 
 
 # Две реализации должны говорить об одном и том же: пакет и монолит -

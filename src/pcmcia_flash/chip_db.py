@@ -95,6 +95,10 @@ def _build_geometry(chips: dict[str, Any]) -> dict[str, dict[str, Any]]:
                         for size, count in (chip.get("sectors") or [])],
             "notes": chip.get("notes", ""),
             "why": chip.get("why", ""),
+            # Строка есть, но её параметры не сверены с даташитом: чип рабочий,
+            # отчёт обязан об этом предупредить (в монолите такие строки уже
+            # есть - HN28F*, LH28F*, D28F*, M28F008/016, M5M29F*, MX29F3210).
+            "unverified": bool(chip.get("unverified", False)),
         }
     return geometry
 

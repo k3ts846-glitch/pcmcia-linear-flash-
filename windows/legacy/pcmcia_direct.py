@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.4"          # версия набора: печатается в отчёте и в --selftest
+KIT_VERSION = "2.17.5"          # версия набора: печатается в отчёте и в --selftest
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -2869,7 +2869,8 @@ GEOMETRY = {
     "M28F102": dict(sector=16 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                     size=256 << 10, volts=12, src="ST M28F102: сектор 16 КиБ, Vpp 12 В"),
     "M28F016": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                    size=2 << 20, volts=12, src="ST M28F016: 2 MiB, Vpp 12 В (данные по умолчанию)"),
+                    size=2 << 20, volts=12, unverified=True,
+                     src="ST M28F016: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     # Имена, которых НЕТ в даташитах: ST выпускала 2/4-Мбит boot-block как
     # M29F002BB/BT и M29F400BB/BT, а серия M28F - старые 12-вольтовые
     # (M28F512/010/020/102). Mitsubishi 4-Мбит boot-block (M5M29F400) тоже не
@@ -2932,12 +2933,21 @@ GEOMETRY = {
                        size=128 << 20, volts=3.3, bypass=False,
                        src="Samsung K9F1G08U0A: NAND, не поддерживается (доступ только по паспорту)"),
     # --- Macronix ---
-    "MX29F1610": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+    # Даташит Macronix MX29F1610 (16M-BIT [2Mx8/1Mx16], 5 В +-10%):
+    # «Sector erase architecture - 16 equal sectors of 128k bytes each»,
+    # страничная запись 128 байт/64 слова. Прежние «64 КиБ сектор» были
+    # опасны: стирание «64 КиБ» стёрло бы блок 128 КиБ вместе с соседом.
+    "MX29F1610": dict(sector=128 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                       size=2 << 20, volts=5, bypass=True,
-                      src="Macronix MX29F1610: 2 MiB, 5 В (аналог Am29F016)"),
-    "MX29F3210": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                      size=4 << 20, volts=5, bypass=True,
-                      src="Macronix MX29F3210: 4 MiB, 5 В (данные по умолчанию)"),
+                      src="Macronix MX29F1610: 16 секторов по 128 КиБ, 5 В "
+                          "(даташит: «16 equal sectors of 128k bytes each»); "
+                          "страничная запись 128 байт не используется - пишем по байту"),
+    # 32-Мбит версия того же семейства; даташита под рукой нет, поэтому
+    # раскладка взята по аналогии (32 x 128 КиБ) и строка помечена unverified.
+    "MX29F3210": dict(sector=128 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                      size=4 << 20, volts=5, bypass=True, unverified=True,
+                      src="Macronix MX29F3210: 4 МиБ, 5 В; раскладка 32 x 128 КиБ "
+                          "взята по аналогии с MX29F1610 - даташитом не сверена"),
     # --- SST ---
     "SST39VF010": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                        size=128 << 10, volts=3, bypass=True,
@@ -3086,33 +3096,43 @@ GEOMETRY = {
     # --- Hitachi ---
     "HN28F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      size=128 << 10, volts=5, bypass=True,
-                     src="Hitachi HN28F010: 128 KiB, 5 В, JEDEC (по умолчанию)"),
+                     unverified=True,
+                     src="Hitachi HN28F010: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     "HN28F020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      size=256 << 10, volts=5, bypass=True,
-                     src="Hitachi HN28F020: 256 KiB, 5 В, JEDEC (по умолчанию)"),
+                     unverified=True,
+                     src="Hitachi HN28F020: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     "HN28F100": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      size=1 << 20, volts=5, bypass=True,
-                     src="Hitachi HN28F100: 1 MiB, 5 В, JEDEC (по умолчанию)"),
+                     unverified=True,
+                     src="Hitachi HN28F100: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     # --- Mitsubishi ---
     "M5M29F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                       size=128 << 10, volts=5, bypass=True,
-                      src="Mitsubishi M5M29F010: 128 KiB, 5 В, аналог Am29F010"),
+                      unverified=True,
+                     src="Mitsubishi M5M29F010: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     "M5M29F020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                       size=256 << 10, volts=5, bypass=True,
-                      src="Mitsubishi M5M29F020: 256 KiB, 5 В, аналог Am29F020"),
+                      unverified=True,
+                     src="Mitsubishi M5M29F020: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     # --- NEC ---
     "D28F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                    size=128 << 10, volts=12, src="NEC D28F010: 128 KiB, Vpp 12 В (по умолчанию)"),
+                    size=128 << 10, volts=12, unverified=True,
+                     src="NEC D28F010: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     "D28F020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                    size=256 << 10, volts=12, src="NEC D28F020: 256 KiB, Vpp 12 В (по умолчанию)"),
+                    size=256 << 10, volts=12, unverified=True,
+                     src="NEC D28F020: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     # --- Sharp ---
     "LH28F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=128 << 10, volts=12, src="Sharp LH28F010: 128 KiB, Vpp 12 В (по умолчанию)"),
+                     size=128 << 10, volts=12, unverified=True,
+                     src="Sharp LH28F010: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     "LH28F020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=256 << 10, volts=12, src="Sharp LH28F020: 256 KiB, Vpp 12 В (по умолчанию)"),
+                     size=256 << 10, volts=12, unverified=True,
+                     src="Sharp LH28F020: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     # --- СGS-Thomson / ST (дополнительно к M28F*) ---
     "M28F008": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                    size=1 << 20, volts=12, src="ST M28F008: 1 MiB, Vpp 12 В (по умолчанию)"),
+                    size=1 << 20, volts=12, unverified=True,
+                     src="ST M28F008: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     # --- Samsung (дополнительно к K9*) ---
     "K9F1208U0A": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                        size=128 << 20, volts=3.3, bypass=False,
@@ -3371,7 +3391,10 @@ def identify_chip(flash, info=None, force=None, progress=None):
                protocol=geo.get("protocol", "jedec"),
                # карта секторов ОДНОГО чипа (в байтах), как её видит таблица
                sectors=list(geo.get("sectors") or []),
-               ambiguous=bool(geo.get("ambiguous")))
+               ambiguous=bool(geo.get("ambiguous")),
+               # строка есть в таблице, но её параметры не сверены с даташитом
+               unverified=bool(geo.get("unverified")),
+               src=str(geo.get("src") or ""))
     if progress:
         progress("определяю микросхему: опрос самой микросхемы")
     auto = autodetect_chip(flash)
@@ -5220,6 +5243,11 @@ def _flash_report(parts, extra_lines=()):
     print(f"  адреса команд         : {cmd[0]:#x} / {cmd[1]:#x}"
           + (", команда СЛОВОМ (Intel 28F)" if geo.get("wide") else ", командой байт")
           + (f", страница {geo.get('page')} байт" if (geo.get("page") or 1) > 1 else ""))
+    if geo.get("unverified"):
+        print("  ВНИМАНИЕ: параметры не сверены с даташитом: "
+              + (geo.get("src") or "источника нет")[:110])
+        print("            первый сектор проверьте на копии карты "
+              "(или укажите --chip с проверенной моделью)")
     if geo.get("autodetect"):
         ad = geo["autodetect"]
         bits = []
