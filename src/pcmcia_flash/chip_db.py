@@ -86,6 +86,12 @@ def _build_geometry(chips: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "protocol": chip.get("protocol", "jedec"),
             "volts": chip.get("volts", 5),
             "manuf": chip.get("manuf", ""),
+            # uniform=False - у микросхемы НЕОДНОРОДНАЯ карта секторов
+            # (boot block: 16K + 2x8K + 32K + N x 64K и подобное). Такой чип
+            # нельзя стирать «сектором 64 КиБ»: первый сектор меньше, и
+            # стирание задело бы соседние данные. См. chips.require_uniform.
+            "uniform": chip.get("uniform", True),
+            "notes": chip.get("notes", ""),
         }
     return geometry
 

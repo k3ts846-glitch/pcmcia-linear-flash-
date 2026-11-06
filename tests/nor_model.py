@@ -201,27 +201,27 @@ class ModelCardState:
             if self.prog_left <= 0:
                 self.state = "bypass" if self.bypass else "idle"
             return
-        if st == "erase_addr":
-            if getattr(self, "erase_left", 1) > 1:
-                self.erase_left -= 1
-                return
-            self.state = "idle"
-            if self.refuse_erase:
-                self.erase_fail = True
-                return
-            if self.quiet_erase:
-                return
-            base = local - (local % (self.sector // 2))
-            for i in range(base, min(base + self.sector // 2, self.chip_size)):
-                self.mem[chip][i] = 0xFF
-            self.erases += 1
-            return
         if st == "erase_cmd":
-            if local == self.cmd[0] and val == d.NOR_ERASE_SECTOR:
-                self.state = "erase_addr"
-                self.erase_left = 2 if self.wide else 1
-                return
+            # Даташит (AMD/MX «Sector Erase Command Sequence», 6 циклов):
+            # шестой цикл — 30h ПО АДРЕСУ СТИРАЕМОГО СЕКТОРА. Сектор выбирают
+            # старшие биты этого адреса (A19-A12), а не командный 0x555.
+            # Поэтому модель стирает тот сектор, куда реально попал адрес:
+            # если код пошлёт 30h в 0x555, сотрётся сектор 0 - ровно как на
+            # настоящей карте. Так ошибка в адресе становится видимой в тесте.
             self.state = "idle"
+            if val == d.NOR_ERASE_SECTOR:
+                self.erase_targets.append((chip, local))
+                if self.refuse_erase:
+                    self.erase_fail = True
+                    return
+                if self.quiet_erase:
+                    return
+                chip_sector = self.sector // max(self.chips, 1)
+                base = local - (local % chip_sector)
+                for i in range(base, min(base + chip_sector, self.chip_size)):
+                    self.mem[chip][i] = 0xFF
+                self.erases += 1
+            return
         self.cmds.append((local, val))
         if val in (d.NOR_RESET, d.INTEL_RESET) and st != "buffer_write":
             self._mode = "array"
@@ -235,9 +235,19 @@ class ModelCardState:
         if st == "u1" and local == self.cmd[1] and val == d.NOR_UNLOCK2:
             self.state = "u2"
             return
+        # CFI Query: ОДИН цикл, адрес 55h, данные 98h (без разблокировки).
+        if st == "idle" and local == 0x55 and val == d.AMD_READ_CFI:
+            if not self.no_cfi:
+                self._mode = "cfi"
+            return
         if st == "u2" and local == self.cmd[0]:
             self._mode_hook(local, val)
             if val == d.NOR_BYPASS:
+                if not self.supports_bypass:
+                    # Микросхема не знает команды 20h: игнорирует её, как
+                    # настоящая. Именно так выглядит карта с Am29F016 (без D).
+                    self.state = "idle"
+                    return
                 self.bypass = True
                 self.state = "bypass"
                 return
@@ -429,7 +439,7 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
                  blank=True, refuse_program=(), refuse_erase=False,
                  quiet_erase=False, stuck=None, answer_id=True,
                  sector_override=None, card_mib=4, no_vpp=False,
-                 page_size_cfi=0):
+                 page_size_cfi=0, supports_bypass=True, no_cfi=False):
         self.d = load_direct(kit or os.environ.get("KIT_DIR", "."))
         g = self.d.geometry_for(chip_name)
         self.chip_name = chip_name
@@ -456,6 +466,8 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
         self.no_vpp = no_vpp       # нет 12 В на Vpp: статус скажет VPPS=1
         self.stuck = stuck
         self.page_size_cfi = page_size_cfi
+        self.supports_bypass = supports_bypass   # чип знает команду 20h?
+        self.no_cfi = no_cfi                     # чип не отвечает на 98h
         self.state = "idle"
         self.fail_page = None
         self.protect_groups = [False] * 8   # состояние защиты 8 групп секторов
@@ -463,6 +475,7 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
         self.page_writes = 0
         self.prog_left = 1
         self.erase_left = 1
+        self.erase_targets = []          # (чип, адрес), по которым пришёл 30h
         self._mode = "array"
         self.bypass = False          # Unlock Bypass активен: A0h принимается без разблокировки
         self.fail_off = None
@@ -481,31 +494,57 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
         return table.get(self.chip_name, (0x01, 0xFF))
 
     def _cfi_bytes(self):
-        """Мини-CFI: "QRY", размер сектора, multibyte-write, напряжения.
+        """Мини-таблица CFI ровно по раскладке CFI Publication 100 / cfi.h.
 
-        Поля по даташиту JEDEC CFI. page_size=0 означает отсутствие буфера
-        записи (побайтовая программа A0h), как у Am29F016/032.
+        Смещения (сверено с include/linux/mtd/cfi.h, struct cfi_ident):
+
+          0x10-0x12  "QRY";
+          0x13-0x14  набор команд (02h = AMD/Fujitsu);
+          0x15-0x16  адрес расширенной таблицы (0x40, там "PRI"+версия);
+          0x1B-0x1E  Vcc min/max, Vpp min/max при записи (100 мВ);
+          0x1F-0x22  типовые тайм-ауты (2^n мкс);
+          0x27       ёмкость чипа: 2^n байт;
+          0x28-0x29  разрядность шины;
+          0x2A-0x2B  буферная запись: 2^n байт (0 = нет);
+          0x2C       число erase-регионов;
+          0x2D-0x30  регион: блоков-1 (16 бит), размер/256 (16 бит).
+
+        Модель обязана отдавать таблицу именно в этой раскладке - раньше она
+        повторяла ошибку кода (поля на байт раньше), и тест ничего не ловил.
+        page_size_cfi=0 означает отсутствие буфера записи, как у Am29F016.
         """
-        cfi = bytearray(0x40)
+        cfi = bytearray(0x48)
         cfi[0x10:0x13] = b"QRY"
-        cfi[0x13] = 0x02          # версия CFI 2.0 (старший байт)
+        cfi[0x13] = 0x02                      # набор команд: AMD/Fujitsu
         cfi[0x14] = 0x00
-        sector = self.sector_chip
-        cfi[0x2C] = (sector >> 8) & 0xFF
-        cfi[0x2D] = (sector >> 16) & 0xFF
-        count = self.chip_size // sector
-        cfi[0x2E] = count & 0xFF
-        cfi[0x2F] = (count >> 8) & 0xFF
-        cfi[0x28] = 0x01
+        cfi[0x15] = 0x40                      # P_ADR -> расширенная таблица
+        cfi[0x16] = 0x00
+        cfi[0x1B] = 30                        # Vcc min 3.0 В (100 мВ)
+        cfi[0x1C] = 36                        # Vcc max 3.6 В
+        cfi[0x1D] = 0                         # Vpp нет
+        cfi[0x1E] = 0
+        cfi[0x1F] = 0x07                      # запись слова: 128 мкс
+        cfi[0x20] = 0x09                      # буфер: 512 мкс
+        cfi[0x21] = 0x0A                      # сектор: 1 мс (типовая)
+        cfi[0x22] = 0x0C                      # чип: 4 мс (типовая)
+        cfi[0x23] = 0x0B                      # запись слова: 2048 мкс (макс)
+        cfi[0x25] = 0x0E                      # сектор: 16 мс (макс)
+        size = self.chip_size
+        cfi[0x27] = size.bit_length() - 1 if size else 0     # 2^n байт
+        cfi[0x28] = 0x01                      # x8
         cfi[0x29] = 0x00
-        cfi[0x2A] = self.page_size_cfi
-        cfi[0x30] = 0x50
-        cfi[0x31] = 0x00
-        cfi[0x34] = 0xFF
-        cfi[0x35] = 0x00
-        cfi[0x36] = 0x07
-        cfi[0x38] = 0x0A
-        cfi[0x3A] = 0x0C
+        cfi[0x2A] = self.page_size_cfi        # 2^n байт буфера, 0 = нет
+        cfi[0x2B] = 0x00
+        sector = self.sector_chip
+        count = max(size // sector, 1)
+        cfi[0x2C] = 1                         # один erase-регион
+        cfi[0x2D] = (count - 1) & 0xFF        # блоков - 1, младший байт
+        cfi[0x2E] = ((count - 1) >> 8) & 0xFF
+        cfi[0x2F] = (sector // 256) & 0xFF    # размер блока / 256
+        cfi[0x30] = ((sector // 256) >> 8) & 0xFF
+        cfi[0x40:0x43] = b"PRI"               # расширенная таблица
+        cfi[0x43] = 0x01                      # версия CFI 1.2
+        cfi[0x44] = 0x02
         return bytes(cfi)
 
 

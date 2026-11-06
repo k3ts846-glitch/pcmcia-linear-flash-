@@ -147,6 +147,7 @@ class NorFlashIO:
         self.page_card = self.page * self.chips
         self.bypass = bool(bypass)                  # Unlock Bypass 20h есть?
         self._bypass_active = False                 # сеанс bypass открыт?
+        self._bypass_broken = False                 # bypass не работает?
         self._erase_suspended = False               # стирание приостановлено?
         self.name = name
 
@@ -368,14 +369,25 @@ class NorFlashProgramming:
             return True, ""
         if before != 0xFF:
             return False, f"байт не стёрт ({before:#04x}) — нужна чистка сектора"
-        if self.bypass:
+        if self.bypass and not self._bypass_broken:
             # Автовход в Unlock Bypass: первая запись открывает сеанс,
             # последующие пишут за 2 цикла без повторной разблокировки.
             # Завершить сеанс нужно exit_bypass() (или reset()).
             if not self._bypass_active:
                 self.enter_bypass()
                 self._bypass_active = True
-            return self.program_byte_bypass(card_off, value)
+            ok, why = self.program_byte_bypass(card_off, value)
+            if ok:
+                return ok, why
+            # Микросхема не приняла Unlock Bypass. Так бывает: JEDEC ID у
+            # семейства один (01ADh у Am29F016, B и D), а команда 20h есть
+            # только у поздних ревизий. Откатываемся на обычную запись A0h -
+            # один раз, с предупреждением, и больше bypass не пробуем.
+            self.exit_bypass()
+            self._bypass_active = False
+            self._bypass_broken = True
+            print("  ВНИМАНИЕ: Unlock Bypass (20h) не сработал: " + why
+                  + ". Дальше пишу обычной командой A0h - медленнее, но верно.")
         self.unlock()
         self._send(self.cmd1, NOR_PROGRAM)
         self.bus.wr(card_off, value)
@@ -765,8 +777,12 @@ class NorFlashErase:
             self.unlock()
             self._send(self.cmd1, NOR_ERASE_SETUP)
             self.unlock()
-            self._send(self.cmd1, NOR_ERASE_SECTOR)
-            self.bus.wr(addr, 0xFF)
+            # Шестой цикл - 30h ПО АДРЕСУ СЕКТОРА (даташит, «Sector Erase
+            # Command Sequence»; так же делают flashrom: issuecmd(0x30, page)
+            # и ядро Linux: map_write(map, cfi->sector_erase_cmd, adr)).
+            # Раньше здесь стояло _send(self.cmd1, ...) + wr(addr, 0xFF):
+            # команда уходила в 0x555, то есть ВСЕГДА стирала сектор 0.
+            self.bus.wr(addr, NOR_ERASE_SECTOR)
             ok, why = self._wait_erase(addr)
             if not ok:
                 self.reset()

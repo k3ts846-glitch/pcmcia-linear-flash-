@@ -17,9 +17,11 @@ from .chip_db import (
     CHIP_GEOMETRY, AMD_PARTS, FUJITSU_PARTS, INTEL_PARTS,
     VPP5, VPP126, PAGE_NONE,
 )
+from .addressing import chip_abs
 from .constants import (
     NOR_CMD_ADDR1, NOR_CMD_ADDR2, SECTOR,
 )
+from .errors import DirectError
 
 
 def vpp_need(info):
@@ -69,167 +71,440 @@ def vpp_need(info):
     return 0, "по паспорту тип микросхем не определить"
 
 
+class UnsupportedChip(ValueError):
+    """Микросхема известна, но этим набором работать с ней нельзя."""
+
+
+def require_uniform(geo: dict) -> dict:
+    """Проверить, что карта секторов однородная; иначе - отказ с причиной.
+
+    Зачем отказывать, а не «попробовать»: стирание идёт по границам сектора,
+    вычисленным как «ёмкость / размер сектора». У микросхем с boot-блоком
+    первый сектор 16 КиБ, затем 8+8+32 КиБ, и только дальше 64 КиБ. Если
+    стирать такой чип, считая все сектора 64-килобайтными, команда 30h,
+    посланная по адресу 0x8000, сотрёт сектор 0x0000-0x7FFF вместе с
+    паспортом карты. Поэтому - честный отказ, а не порча данных.
+    """
+    if geo.get("uniform", True):
+        return geo
+    notes = geo.get("notes") or "неоднородная карта секторов"
+    raise UnsupportedChip(
+        f"{geo.get('name') or 'микросхема'}: {notes}. Этот набор стирает "
+        f"секторами одного размера, а у boot-чипов первый сектор меньше - "
+        f"стирание задело бы соседние данные. Поддержка карты секторов пока "
+        f"не сделана (см. ПЛАН_РАЗВИТИЯ_2.17). Укажите --chip с однородной "
+        f"микросхемой или --sector, если точно знаете раскладку."
+    )
+
+
 def geometry_for(name: str, size: int | None = None, volts: int | None = None) -> dict:
-    """Вернуть параметры микросхемы по имени (или ближайшее совпадение)."""
+    """Параметры микросхемы по имени (или по самому длинному совпадению).
+
+    Длинное совпадение важно: «Am29F016D» не должно подходить под «Am29F016»
+    (у ревизий отличается поддержка Unlock Bypass), а «Am29LV160DB» - под
+    «Am29LV160».
+    """
+    def finish(geo: dict, exact_name: str) -> dict:
+        out = dict(geo)
+        if size is not None:
+            out["size"] = size
+        if volts is not None:
+            out["volts"] = volts
+        out["name"] = exact_name
+        return require_uniform(out)
 
     if name in CHIP_GEOMETRY:
-        geo = dict(CHIP_GEOMETRY[name])
-        if size is not None:
-            geo["size"] = size
-        if volts is not None:
-            geo["volts"] = volts
-        return geo
+        return finish(CHIP_GEOMETRY[name], name)
 
-    # Попробовать найти по частичному совпадению имени
-    for chip_name, geo in CHIP_GEOMETRY.items():
-        if chip_name.lower() in name.lower() or name.lower() in chip_name.lower():
-            result = dict(geo)
-            if size is not None:
-                result["size"] = size
-            if volts is not None:
-                result["volts"] = volts
-            return result
+    up = str(name).strip().upper()
+    hits = [(len(chip_name), chip_name)
+            for chip_name in CHIP_GEOMETRY
+            if len(chip_name) >= 5 and chip_name.upper() in up]
+    if hits:
+        return finish(CHIP_GEOMETRY[max(hits)[1]], max(hits)[1])
 
     raise ValueError(f"неизвестная микросхема: {name}")
 
 
-def chip_name_from_info(info: dict) -> str:
-    """Попытаться определить имя микросхемы по данным автоопределения (ID/CFI)."""
-    manuf = info.get("manufacturer", "")
-    device = info.get("device", "")
-    cfi_id = info.get("cfi_id", "")
+# --- автоопределение ---------------------------------------------------------
+#
+# Источников три, и доверять им надо по-разному:
+#   1. JEDEC ID (команда 90h) - отвечает сама микросхема. У семейства один код
+#      на все ёмкости (Am29F016/Am29F016B/Am29F016D = 01h:ADh), поэтому имя из
+#      него выводится, а ёмкость приходится брать из CFI или паспорта;
+#   2. CFI (команда 98h) - таблица, которую микросхема отдаёт сама: ёмкость,
+#      размер блока, напряжение, тайм-ауты. Отвечают не все (у Am29F016 нет);
+#   3. паспорт карты (CIS) - строки, которые пишет производитель карты; они
+#      бывают устаревшими, поэтому паспорт - последний источник.
+#
+# В прежней версии здесь сравнивалось hex-представление ID со строкой "AMD":
+# сравнение не выполнялось ни разу, автоопределение всегда падало с ValueError,
+# и работал только --chip. Теперь сравниваются числа.
 
-    # Простое сопоставление по производителю и устройству
-    for chip_name, geo in CHIP_GEOMETRY.items():
-        if geo["manuf"].lower() in manuf.lower():
-            return chip_name
-    return ""
+# Код производителя -> (человеческое имя, таблица «код устройства -> имя»).
+_VENDORS = {
+    0x01: ("AMD", AMD_PARTS),
+    0x04: ("Fujitsu", FUJITSU_PARTS),
+    0x89: ("Intel", INTEL_PARTS),
+}
+
+CFI_QUERY = 0x98
+CFI_ADDR = 0x55
+
+
+def _as_int(value):
+    """'0xAD' / 'AD' / 173 -> 173. Что не число - None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text.startswith("0x"):
+        text, base = text[2:], 16
+    elif any(c in "abcdef" for c in text):
+        text, base = text, 16
+    else:
+        text, base = text, 10
+    try:
+        return int(text, base)
+    except ValueError:
+        return None
+
+
+def _passport_text(info: dict) -> str:
+    """Все строки паспорта одной строкой в верхнем регистре."""
+    parts = []
+    for key in ("product", "manufacturer", "device", "name", "jedec"):
+        value = (info or {}).get(key)
+        if isinstance(value, (list, tuple)):
+            parts.extend(str(v) for v in value)
+        elif value:
+            parts.append(str(value))
+    return " ".join(parts).upper()
+
+
+def chip_name_from_info(info: dict) -> str:
+    """Имя микросхемы по паспорту карты (CIS).
+
+    Берётся САМОЕ ДЛИННОЕ совпадение: «AM29F016D» должно победить «AM29F016»,
+    иначе ёмкость и число секторов будут от другой ревизии.
+    """
+    text = _passport_text(info)
+    if not text:
+        return ""
+    best = ""
+    for name in CHIP_GEOMETRY:
+        if len(name) >= 5 and name.upper() in text and len(name) > len(best):
+            best = name
+    return best
+
+
+def read_cfi(flash) -> dict:
+    """Прочитать общую таблицу CFI (команда 98h). Пустой dict - CFI нет.
+
+    Раскладка полей - CFI Publication 100 (таблица 5). Проверено по ядру
+    Linux: include/linux/mtd/cfi.h (struct cfi_ident) и
+    drivers/mtd/chips/cfi_probe.c, где CFI читается с адреса 0x10:
+
+        0x10-0x12  "QRY" - признак CFI;
+        0x13-0x14  основной набор команд (01h = Intel, 02h = AMD/Fujitsu);
+        0x15-0x16  адрес расширенной таблицы этого набора;
+        0x1B-0x1E  Vcc/Vpp min/max при записи, единица 100 мВ;
+        0x1F-0x26  тайм-ауты (тип./макс.) для записи слова, буфера,
+                   стирания сектора и чипа - степень двойки в микросекундах;
+        0x27       ёмкость ОДНОГО чипа: 2^n байт;
+        0x28-0x29  разрядность шины: 1 = x8, 2 = x16, 3 = x8/x16;
+        0x2A-0x2B  буферная запись: 2^n байт (0 - буфера нет);
+        0x2C       число erase-регионов;
+        0x2D-0x30  регион 1: младшие 16 бит = число блоков - 1,
+                   старшие 16 бит = размер блока в единицах 256 байт.
+
+    ВНИМАНИЕ: в монолите windows/legacy/pcmcia_direct.py те же поля читаются
+    со сдвигом на байт (номер региона принимается за размер сектора), из-за
+    чего ёмкость из CFI там получается мусорной. Здесь - по таблице выше.
+    """
+    out: dict = {}
+    flash._send(CFI_ADDR, CFI_QUERY)
+
+    def q(off):
+        return flash.read_byte(chip_abs(off, 0, flash.chips))
+
+    try:
+        if q(0x10) != 0x51 or q(0x11) != 0x52 or q(0x12) != 0x59:   # "QRY"
+            return {}
+        cmdset = q(0x13) | (q(0x14) << 8)
+        out["cmdset"] = cmdset
+        out["cmdset_name"] = {0x0001: "Intel", 0x0002: "AMD/Fujitsu"}.get(
+            cmdset, f"неизвестный ({cmdset:#06x})")
+        if q(0x27):
+            out["size"] = 1 << q(0x27)             # байт в ОДНОМ чипе
+        iface = q(0x28) | (q(0x29) << 8)
+        out["bus_width"] = {0x01: "x8", 0x02: "x16", 0x03: "x8/x16"}.get(
+            iface, f"неизвестно ({iface:#06x})")
+        exponent = q(0x2A) | (q(0x2B) << 8)
+        out["buf_write"] = (1 << exponent) if 0 < exponent <= 9 else 0
+        out["vcc_write_mv"] = (q(0x1B) * 100, q(0x1C) * 100)
+        out["vpp_write_mv"] = (q(0x1D) * 100, q(0x1E) * 100)
+        out["t_word_us"] = 1 << min(q(0x1F), 20)
+        out["t_sector_erase_us"] = 1 << min(q(0x21), 24)
+        out["t_chip_erase_us"] = 1 << min(q(0x22), 26)
+        regions = []
+        base = 0x2D
+        for _ in range(min(q(0x2C), 4)):
+            info32 = (q(base) | (q(base + 1) << 8) |
+                      (q(base + 2) << 16) | (q(base + 3) << 24))
+            regions.append({"blocks": (info32 & 0xFFFF) + 1,
+                            "size": (info32 >> 16) * 256})
+            base += 4
+        out["regions"] = regions
+        if len(regions) == 1:
+            out["sector"] = regions[0]["size"]      # у однородных карт - он же
+        elif regions:
+            out["uniform"] = False
+    finally:
+        flash.reset()
+    return out
+
+
+def _geometry_from_cfi(cfi: dict, size: int = 0) -> dict | None:
+    """Геометрия по данным CFI: по ёмкости и размеру блока.
+
+    Если таблица не знает такую микросхему - строим геометрию из того, что
+    сказала она сама (протокол JEDEC, байтовые команды 0x555/0x2AA - это
+    адреса команд AMD/Fujitsu, других в CFI с набором 02h не бывает).
+    """
+    chip_size = int(cfi.get("size") or 0)
+    sector = int(cfi.get("sector") or 0)
+    if not chip_size:
+        return None
+    hits = []
+    for name, geo in CHIP_GEOMETRY.items():
+        if int(geo.get("size") or 0) != chip_size:
+            continue
+        if sector and int(geo.get("sector") or 0) != sector:
+            continue
+        hits.append((name, geo))
+    # Однородные 2-МБ 64-КиБ чипы есть у десятка производителей; берём первый,
+    # но помечаем в отчёте, что имя - семейное, а не точное.
+    for name, geo in hits:
+        out = dict(geo)
+        out["name"] = name
+        out["name_exact"] = False
+        return out
+    if not sector:
+        return None
+    return {
+        "name": f"CFI {chip_size // 1024} КиБ",
+        "name_exact": False,
+        "size": chip_size,
+        "sector": sector,
+        "cmd": (NOR_CMD_ADDR1, NOR_CMD_ADDR2),
+        "wide": False,
+        "page": int(cfi.get("buf_write") or 1) or 1,
+        "bypass": False,
+        "strata": False,
+        "protocol": "jedec",
+        "volts": (cfi.get("vcc_write_mv") or (0, 0))[1] // 1000 or None,
+        "manuf": "",
+    }
+
+
+def _read_ids(flash) -> dict:
+    """Сырые ответы микросхемы: JEDEC ID и таблица CFI."""
+    out: dict = {}
+    try:
+        man, dev = flash.read_id()
+        if man is not None:
+            out["manuf"], out["device"] = man, dev
+    except (DirectError, OSError, ValueError, IndexError):
+        pass
+    try:
+        cfi = read_cfi(flash)
+        if cfi:
+            out["cfi"] = cfi
+    except (DirectError, OSError, ValueError, IndexError):
+        pass
+    return out
 
 
 def identify_chip(flash, info: dict | None = None, force: str | None = None,
                   progress=None) -> dict:
-    """Идентифицировать микросхему по JEDEC ID / CFI.
+    """Что за микросхема. Порядок: --chip, паспорт, JEDEC ID, CFI.
 
-    Возвращает геометрию (dict) или вызывает ValueError, если не удалось.
+    Возвращает геометрию из CHIP_GEOMETRY, дополненную ключами:
+    "name" (имя), "how" (откуда взято) и "autodetect" (сырые ID и CFI).
+    Если не ответил никто - ValueError с объяснением, что делать.
     """
+    info = info or {}
+    size = 0
+    devices = info.get("devices") or []
+    if devices:
+        size = devices[0].get("size") or 0
+
     if force:
-        return geometry_for(force)
+        geo = geometry_for(force, size=size or None)
+        geo["name"] = force
+        geo["how"] = "указано ключом --chip"
+        geo.setdefault("autodetect", {})
+        return geo
 
-    if info is None:
-        info = {}
+    name = chip_name_from_info(info)
+    if name:
+        geo = geometry_for(name, size=size or None)
+        geo["name"] = name
+        geo["how"] = "строка паспорта карты"
+        geo.setdefault("autodetect", {})
+        return geo
 
-    manuf = info.get("manufacturer", "")
-    device = info.get("device", "")
+    if progress:
+        progress("спрашиваю микросхему: JEDEC ID (90h) и CFI (98h)")
+    auto = _read_ids(flash)
+    man, dev = auto.get("manuf"), auto.get("device")
+    if man is None:
+        # Микросхема не ответила на 90h (бывает, когда команды в обход
+        # контроллера не проходят), но JEDEC ID может быть в паспорте карты.
+        man, dev = _as_int(info.get("manufacturer")), _as_int(info.get("device"))
+        if man is not None:
+            auto["manuf"], auto["device"] = man, dev
+            auto["id_source"] = "паспорт карты (микросхема на 90h не ответила)"
+    vendor = _VENDORS.get(man if man is not None else -1)
+    if vendor and dev in vendor[1]:
+        name = vendor[1][dev][0]
+        geo = geometry_for(name, size=size or None)
+        geo["name"] = name
+        geo["how"] = f"JEDEC ID {man:#04x}:{dev:#04x} ({vendor[0]})"
+        geo["autodetect"] = auto
+        return geo
 
-    # Прямое сопоставление по известным парам (производитель, устройство)
-    known_ids = {
-        ("AMD", "Am29F010"):   "Am29F010",
-        ("AMD", "Am29F016"):   "Am29F016",
-        ("AMD", "Am29F017D"):  "Am29F017D",
-        ("AMD", "Am29F032B"):  "Am29F032B",
-        ("AMD", "Am29F040"):   "Am29F040",
-        ("AMD", "Am29F080"):   "Am29F080",
-        ("AMD", "Am29F080B"):  "Am29F080B",
-        ("AMD", "Am29F200AT"): "Am29F200AT",
-        ("AMD", "Am29F200AB"): "Am29F200AB",
-        ("AMD", "Am29F400AT"): "Am29F400AT",
-        ("AMD", "Am29F400AB"): "Am29F400AB",
-        ("AMD", "Am29F800BT"): "Am29F800BT",
-        ("AMD", "Am29F800BB"): "Am29F800BB",
-        ("Fujitsu", "MBM29F016"): "MBM29F016",
-        ("Fujitsu", "MBM29F040C"): "MBM29F040C",
-        ("Intel", "28F002SA"): "28F002SA",
-        ("Intel", "28F004SA"): "28F004SA",
-        ("Intel", "28F008SA"): "28F008SA",
-        ("Intel", "28F016SA"): "28F016SA",
-        ("Intel", "28F016SV"): "28F016SV",
-        ("Intel", "28F016S5"): "28F016S5",
-        ("ST", "M28F016S5"): "M28F016S5",
-    }
-    key = (manuf, device)
-    if key in known_ids:
-        return geometry_for(known_ids[key])
+    cfi = auto.get("cfi") or {}
+    geo = _geometry_from_cfi(cfi, size=size)
+    if geo:
+        geo["how"] = "таблица CFI (98h): ёмкость и размер блока"
+        geo["autodetect"] = auto
+        return geo
 
-    # Intel Device ID (0xA1 → 28F016SA, 0xA2 → 28F008SA и т.д.)
-    # Производитель Intel: Manufacturer ID = 89h
-    if manuf and "INTEL" in str(manuf).upper():
-        try:
-            dev_int = int(device, 16) if isinstance(device, str) else device
-            if dev_int in INTEL_PARTS:
-                return geometry_for(INTEL_PARTS[dev_int][0])
-        except (ValueError, TypeError):
-            pass
-
-    # AMD Device ID (0x20 → Am29F010, 0xA4 → Am29F040 и т.д.)
-    # Производитель AMD: Manufacturer ID = 01h
-    if manuf and "AMD" in str(manuf).upper():
-        try:
-            dev_int = int(device, 16) if isinstance(device, str) else device
-            if dev_int in AMD_PARTS:
-                return geometry_for(AMD_PARTS[dev_int][0])
-        except (ValueError, TypeError):
-            pass
-
-    # Fujitsu Device ID (0xAD → MBM29F016, 0xA4 → MBM29F040C)
-    # Производитель Fujitsu: Manufacturer ID = 04h
-    if manuf and "FUJITSU" in str(manuf).upper():
-        try:
-            dev_int = int(device, 16) if isinstance(device, str) else device
-            if dev_int in FUJITSU_PARTS:
-                return geometry_for(FUJITSU_PARTS[dev_int][0])
-        except (ValueError, TypeError):
-            pass
-
-    # Если не удалось по ID, пробуем CFI
-    cfi_id = info.get("cfi_id")
-    if cfi_id:
-        for chip_name, geo in CHIP_GEOMETRY.items():
-            if geo["manuf"].lower() in manuf.lower():
-                return geometry_for(chip_name)
-
+    answered = "нет ответа" if man is None else f"{man:#04x}:{dev:#04x}"
     raise ValueError(
-        f"не удалось идентифицировать микросхему: производитель={manuf}, "
-        f"устройство={device}"
+        f"микросхема не ответила: JEDEC ID {answered}, CFI "
+        f"{'есть, но размеров не даёт' if cfi else 'не отвечает'}. "
+        f"Укажите модель ключом --chip (список: pcmcia-flash chips)"
     )
 
 
 def autodetect_chip(flash, progress=None) -> dict:
-    """Автоопределение микросхемы через JEDEC ID (90h) и CFI (98h).
-
-    Возвращает (геометрия, информация) или поднимает исключение.
-    """
+    """Автоопределение микросхемы: JEDEC ID и CFI, без паспорта карты."""
     if progress:
-        progress("определяю микросхему по JEDEC ID...")
-
-    man, dev = flash.read_id()
-    info = {"manufacturer": hex(man), "device": hex(dev)}
-
-    # Пробуем CFI Query
-    try:
-        flash.unlock()
-        flash._send(flash.cmd1, 0x98)  # AMD_READ_CFI
-        cfi_bytes = flash.read_byte(0x00), flash.read_byte(0x01)
-        info["cfi_id"] = bytes(cfi_bytes)
-        flash.reset()
-    except Exception:  # noqa: BLE001 - CFI может не поддерживаться
-        info["cfi_id"] = None
-
-    geo = identify_chip(flash, info=info)
+        progress("определяю микросхему: JEDEC ID и CFI")
+    geo = identify_chip(flash, info={})
     return geo
 
 
-def verify_geometry(flash, geo: dict, progress=None) -> bool:
-    """Проверить, что геометрия соответствует реальной микросхеме.
+def _program_restore(flash, off: int, was: bytes) -> str:
+    """Вернуть в сектор прежние байты. Возвращает описание, что вышло.
 
-    Сверяет размер и сектор с данными CFI.
+    Писать можно только туда, где сейчас 0xFF: стереть байт в 0 нельзя, а
+    «записать поверх» NOR-память не умеет - запись только сбрасывает единицы
+    в нули. Поэтому восстанавливаем побайтово и честно сообщаем, если
+    что-то вернуть не удалось.
     """
-    if progress:
-        progress("проверяю геометрию микросхемы...")
+    lost = 0
+    for i, b in enumerate(was):
+        if b == 0xFF:
+            continue
+        cur = flash.read_byte(off + i)
+        if cur == b:
+            continue
+        if cur != 0xFF:
+            lost += 1
+            continue
+        ok, why = flash.program_byte(off + i, b)
+        if not ok:
+            lost += 1
+    if lost:
+        return f"вернуть удалось не всё: {lost} байт не восстановлены"
+    got = flash.read(off, len(was))
+    if got != was:
+        diff = sum(1 for a, b in zip(got, was) if a != b)
+        return f"после возврата не совпадает {diff} байт"
+    return "сектор возвращён как был"
 
-    try:
-        return True
-    except Exception:  # noqa: BLE001
-        return False
+
+def verify_geometry(flash, geo: dict, progress=None,
+                    backup_path=None) -> tuple[bool, str]:
+    """Проверить ДО записи, что микросхема и её геометрия те, что мы думаем.
+
+    Проверка активная: пассивно этого не увидеть. Ошибка «взяли 64 КиБ вместо
+    16 КиБ» проявляется только стиранием - и, если её не заметить, стирание
+    задевает соседние данные.
+
+    Порядок и почему так:
+      1. пробуем ПОСЛЕДНИЙ сектор карты - там обычно меньше всего данных;
+      2. СНИМАЕМ его в память (и, если задан backup_path, в файл) ДО стирания:
+         проверка не должна ничего уничтожать;
+      3. стираем и проверяем, что в секторе только 0xFF;
+      4. возвращаем снимок обратно и сверяем побайтово;
+      5. если сектор не стёрся - тоже пытаемся вернуть данные и говорим об
+         этом прямо, а не «проверка не прошла».
+
+    Прежняя версия стирала последний сектор и не возвращала его (данные
+    пропадали), либо возвращала только при --snapshot-dir, да и то с ошибкой.
+
+    Возвращает (ok, почему). Никогда не оставляет сектор стёртым молча.
+    """
+    sector = int(geo.get("sector") or 0)
+    limit = int(geo.get("size") or 0)
+    if sector <= 0:
+        return True, "размер сектора неизвестен - проверка пропущена"
+    if limit < sector:
+        return True, (f"ёмкость карты неизвестна или меньше сектора "
+                      f"({limit} < {sector}) - проверка пропущена")
+    off = (limit - sector)
+    off -= off % sector
+    if progress:
+        progress(f"проверяю геометрию: сектор по адресу {off:#x}")
+
+    was = flash.read(off, sector)
+    if len(was) != sector:
+        return False, (f"по адресу {off:#x} прочиталось {len(was)} байт "
+                       f"вместо {sector}: карта меньше, чем мы думаем")
+    if backup_path:
+        try:
+            with open(backup_path, "wb") as f:
+                f.write(was)
+        except OSError as exc:
+            return False, f"не смог сохранить копию сектора: {exc}"
+
+    blank = all(b == 0xFF for b in was)
+    ok, why = flash.erase_sector(off)
+    if not ok:
+        back = "" if blank else _program_restore(flash, off, was)
+        return False, (f"сектор {sector // 1024} КиБ по адресу {off:#x} "
+                       f"не стёрся: {why}" + (f"; {back}" if back else ""))
+
+    data = flash.read(off, sector)
+    bad = next((i for i, b in enumerate(data) if b != 0xFF), None)
+    if bad is not None:
+        back = "" if blank else _program_restore(flash, off, was)
+        return False, (f"после стирания байт {off + bad:#x} читается "
+                       f"{data[bad]:#04x} вместо 0xFF: сектор не "
+                       f"{sector // 1024} КиБ, стирание не идёт (Vpp?) или "
+                       f"это не та микросхема"
+                       + (f"; {back}" if back else ""))
+
+    if blank:
+        return True, (f"сектор {sector // 1024} КиБ по адресу {off:#x} "
+                      f"стирается (был пуст, возвращать нечего)")
+    back = _program_restore(flash, off, was)
+    if back != "сектор возвращён как был":
+        return False, (f"сектор стирается, но данные вернуть не удалось: {back}. "
+                       f"Копия сектора "
+                       + (f"в {backup_path}" if backup_path else "потеряна"))
+    return True, (f"сектор {sector // 1024} КиБ стирается по адресу {off:#x}, "
+                  f"данные возвращены")
 
 
 def sector_table(geo: dict, total: int) -> list[dict]:
@@ -262,7 +537,8 @@ def flash_plan(image: bytes, sector: int = SECTOR) -> list[tuple[int, bool, list
 
 
 __all__ = [
-    "CHIP_GEOMETRY", "geometry_for", "chip_name_from_info",
+    "CHIP_GEOMETRY", "geometry_for", "require_uniform", "UnsupportedChip",
+    "chip_name_from_info", "read_cfi",
     "identify_chip", "autodetect_chip", "verify_geometry",
     "sector_table", "flash_plan", "PAGE_NONE",
     "AMD_PARTS", "FUJITSU_PARTS", "INTEL_PARTS", "VPP5", "VPP126", "vpp_need",

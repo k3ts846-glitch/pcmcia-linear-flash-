@@ -1270,7 +1270,9 @@ def _dispatch(args: argparse.Namespace, state: CardState) -> int:
         return act_chip()
     if args.action == "selftest":
         return act_selftest(full=args.full)
-    parser.print_help()
+    # Здесь нет локального parser: _dispatch - отдельная функция, ей парсер
+    # не передают. Раньше это был NameError при запуске без действия.
+    build_parser().print_help()
     return 2
 
 

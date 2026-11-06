@@ -177,21 +177,27 @@ def _flash_report(parts, extra_lines=()):
         ad = geo["autodetect"]
         bits = []
         if ad.get("manuf") is not None:
-            bits.append(f"ID {ad['manuf']:#04x}:{ad['device']:#04x}")
-        if ad.get("cfi_manuf") is not None:
-            bits.append(f"CFI-производитель {ad['cfi_manuf']:#04x}")
-        if ad.get("cfi_device") is not None:
-            bits.append(f"CFI-устройство {ad['cfi_device']:#04x}")
-        if ad.get("cfi_version"):
-            bits.append(f"CFI v{ad['cfi_version']}")
-        if ad.get("sector"):
-            bits.append(f"CFI: сектор {ad['sector'] // 1024} КиБ на чип")
-        if ad.get("size_chip"):
-            bits.append(f"CFI: ёмкость чипа {ad['size_chip'] / 1024 / 1024:.0f} МиБ")
-        if ad.get("max_erase_cycles"):
-            bits.append(f"CFI: до {ad['max_erase_cycles']} циклов стирания")
-        if ad.get("has_write_buffer") and ad.get("page") and ad["page"] > 1:
-            bits.append(f"CFI: буфер записи {ad['page']} байт")
+            bits.append(f"JEDEC ID {ad['manuf']:#04x}:{ad['device']:#04x}")
+        cfi = ad.get("cfi") or {}
+        if cfi:
+            if cfi.get("cmdset_name"):
+                bits.append(f"CFI, набор команд {cfi['cmdset_name']}")
+            if cfi.get("size"):
+                bits.append(f"CFI: ёмкость чипа {cfi['size'] / 1024 / 1024:.1f} МиБ")
+            for reg in cfi.get("regions") or []:
+                bits.append(f"CFI: {reg['blocks']} x "
+                            f"{reg['size'] // 1024} КиБ")
+            if cfi.get("buf_write"):
+                bits.append(f"CFI: буфер записи {cfi['buf_write']} байт")
+            if cfi.get("t_sector_erase_us"):
+                bits.append(f"CFI: стирание сектора до "
+                            f"{cfi['t_sector_erase_us'] / 1000:.0f} мс")
+            vcc = cfi.get("vcc_write_mv") or (0, 0)
+            if vcc[1]:
+                bits.append(f"CFI: Vcc при записи {vcc[0] / 1000:.1f}-"
+                            f"{vcc[1] / 1000:.1f} В")
+        elif ad.get("manuf") is not None:
+            bits.append("CFI не отвечает (у ранних ревизий его нет)")
         if bits:
             print("  ответ микросхемы      : " + "; ".join(bits))
     print(f"  окно моста            : {parts['win']['start']:#x}, "
@@ -256,8 +262,11 @@ def _flash_main(args):
     t0 = time.time()
     rc = 0
     info = parts.get("info") or {}
-    where, why_where = ("array", "")
-    print(f"  паспорт карты         : {why_where}")
+    where = "array"
+    devs = info.get("devices") or []
+    print("  паспорт карты         : "
+          + (f"{len(devs)} устройство(а) в CIS" if devs
+             else "CIS не разобран - параметры берём из автоопределения"))
     if any(d.get("wp") for d in info.get("devices") or []) and not getattr(
             args, "force_write", False):
         print("\nИТОГ: в паспорте отмечен переключатель защиты от записи (WPS).")
@@ -268,24 +277,18 @@ def _flash_main(args):
         return 4
     try:
         if not getattr(args, "no_geometry_check", False) and parts["size"]:
-            off = max(0, (parts["size"] - flash.sector))
-            off -= off % flash.sector
-            back = None
-            if args.snapshot_dir:
-                back = flash.read(off, flash.sector)
+            # Копию сектора проверки кладём в файл, если задан --snapshot-dir:
+            # тогда даже обрыв питания посреди проверки не потеряет данные.
+            backup = None
+            if getattr(args, "snapshot_dir", None):
+                os.makedirs(args.snapshot_dir, exist_ok=True)
+                backup = os.path.join(args.snapshot_dir,
+                                      f"geometry_probe_{parts['size']:#x}.bin")
             ok_g, why_g = verify_geometry(flash, {"sector": flash.sector,
-                                                  "size": parts["size"]})
+                                                  "size": parts["size"]},
+                                          backup_path=backup)
             print("  проверка геометрии    : " + ("ок - " if ok_g else "НЕ ТАК - ")
                   + why_g)
-            if back is not None:
-                flash.erase_sector(off)
-                for i, b in enumerate(back):
-                    if b != 0xFF:
-                        flash.program_byte(off + i, b)
-                got = flash.read(off, flash.sector)
-                print("  сектор проверки       : "
-                      + ("возвращён как был" if got == back
-                         else "ВЕРНУТЬ НЕ УДАЛОСЬ (файл не нужен: данные выше)"))
             if not ok_g:
                 print("\nИТОГ: не начинаю стирание/запись - не сходится тип "
                       "микросхемы.")
@@ -383,17 +386,27 @@ def _flash_main(args):
                 tail = f" ({frac * 100:.0f}%)" if frac is not None else ""
                 print(f"  {text}{tail}", flush=True)
 
+        # Напряжение VPP - ИЗ ТАБЛИЦЫ/ПАСПОРТА, а не всегда 5 В: у Intel
+        # 28Fxxx (SA/SV) программирование идёт при 12 В, и подача 5 В вместо
+        # 12 В означает «стирание не проходит» без внятной причины.
+        volts, why_v = vpp_need(info)
         vpp = check_vpp_state(dev, mem, exca)
-        if not vpp["ok"]:
-            ok_vpp, msg_vpp = set_vpp_for_write(dev, voltage=5,
+        if vpp["ok"]:
+            print(f"  VPP: включён ({vpp['vpp']}, через {vpp['source']})")
+            if volts and vpp.get("vpp") and volts != vpp.get("vpp"):
+                print(f"  ВНИМАНИЕ: по документации нужно {volts} В, "
+                      f"а сейчас {vpp.get('vpp')} В ({why_v}).")
+        elif volts:
+            ok_vpp, msg_vpp = set_vpp_for_write(dev, voltage=volts,
                                                 exca_mem=mem,
                                                 exca_addr=exca)
-            print(f"  VPP: {msg_vpp}")
+            print(f"  VPP: {msg_vpp} ({why_v})")
             if not ok_vpp:
-                print("  ВНИМАНИЕ: VPP не включён. Запись может не пройти — ")
-                print("  микросхеме нужно 5 В или 12 В на VPP.")
+                print("  ВНИМАНИЕ: VPP не включён. Стирание и запись, скорее "
+                      "всего, не пройдут.")
         else:
-            print(f"  VPP: включён ({vpp['vpp']}, через {vpp['source']})")
+            print(f"  VPP: не включаю - {why_v}. Если запись не пойдёт, "
+                  "укажите модель ключом --chip.")
 
         res = flash_write_image(flash, data, progress=prog,
                                 verify=not args.no_verify,
@@ -424,8 +437,9 @@ def _flash_main(args):
         except (DirectError, OSError):
             pass
         parts["bus"].close()
-        if restore_window(mem, exca, snap, dev):
-            pass
+        if not restore_window(mem, exca, snap, dev):
+            print("  ВНИМАНИЕ: окно моста вернуть не удалось. Если карта "
+                  "перестала читаться - выключите и включите слот.")
         mem.close()
 
 

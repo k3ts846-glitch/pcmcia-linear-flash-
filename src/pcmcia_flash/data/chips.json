@@ -14,7 +14,7 @@
       "cmd_addr2": "0x2aa",
       "wide": false,
       "page": null,
-      "bypass": true,
+      "bypass": false,
       "strata": false,
       "protocol": "jedec",
       "volts": 5,
@@ -29,12 +29,27 @@
       "cmd_addr2": "0x2aa",
       "wide": false,
       "page": null,
-      "bypass": true,
+      "bypass": false,
       "strata": false,
       "protocol": "jedec",
       "volts": 5,
       "manuf": "AMD",
       "notes": "16 Mbit, 32x64K сектора"
+    },
+    "Am29F016D": {
+      "jedec_id": null,
+      "size_kib": 2048,
+      "sector_kib": 64,
+      "cmd_addr1": "0x555",
+      "cmd_addr2": "0x2aa",
+      "wide": false,
+      "page": null,
+      "bypass": true,
+      "strata": false,
+      "protocol": "jedec",
+      "volts": 5,
+      "manuf": "AMD",
+      "notes": "16 Mbit, uniform 64K; ревизия D: Unlock Bypass (20h) и CFI; JEDEC ID тот же 01AD, что у Am29F016 - отличать только по CFI"
     },
     "Am29F017D": {
       "jedec_id": "0x3D",
@@ -74,7 +89,7 @@
       "cmd_addr2": "0x2aa",
       "wide": false,
       "page": null,
-      "bypass": true,
+      "bypass": false,
       "strata": false,
       "protocol": "jedec",
       "volts": 5,
@@ -89,7 +104,7 @@
       "cmd_addr2": "0x2aa",
       "wide": false,
       "page": null,
-      "bypass": true,
+      "bypass": false,
       "strata": false,
       "protocol": "jedec",
       "volts": 5,
@@ -104,7 +119,7 @@
       "cmd_addr2": "0x2aa",
       "wide": false,
       "page": null,
-      "bypass": true,
+      "bypass": false,
       "strata": false,
       "protocol": "jedec",
       "volts": 5,
@@ -124,7 +139,8 @@
       "protocol": "jedec",
       "volts": 5,
       "manuf": "AMD",
-      "notes": "2 Mbit, top-boot, неuniform: 16K+8K+8K+32K+3x64K"
+      "notes": "2 Mbit, top-boot, неuniform: 16K+8K+8K+32K+3x64K",
+      "uniform": false
     },
     "Am29F200AB": {
       "jedec_id": "0x57",
@@ -139,7 +155,8 @@
       "protocol": "jedec",
       "volts": 5,
       "manuf": "AMD",
-      "notes": "2 Mbit, bottom-boot, неuniform: 16K+8K+8K+32K+3x64K"
+      "notes": "2 Mbit, bottom-boot, неuniform: 16K+8K+8K+32K+3x64K",
+      "uniform": false
     },
     "Am29F400AT": {
       "jedec_id": "0x23",
@@ -154,7 +171,8 @@
       "protocol": "jedec",
       "volts": 5,
       "manuf": "AMD",
-      "notes": "4 Mbit, top-boot, неuniform: 16K+8K+8K+32K+7x64K"
+      "notes": "4 Mbit, top-boot, неuniform: 16K+8K+8K+32K+7x64K",
+      "uniform": false
     },
     "Am29F400AB": {
       "jedec_id": "0xAB",
@@ -169,7 +187,8 @@
       "protocol": "jedec",
       "volts": 5,
       "manuf": "AMD",
-      "notes": "4 Mbit, bottom-boot, неuniform: 16K+8K+8K+32K+7x64K"
+      "notes": "4 Mbit, bottom-boot, неuniform: 16K+8K+8K+32K+7x64K",
+      "uniform": false
     },
     "Am29F800BT": {
       "jedec_id": "0xD6",
@@ -184,7 +203,8 @@
       "protocol": "jedec",
       "volts": 5,
       "manuf": "AMD",
-      "notes": "8 Mbit, top-boot, неuniform: 16K+8K+8K+32K+15x64K"
+      "notes": "8 Mbit, top-boot, неuniform: 16K+8K+8K+32K+15x64K",
+      "uniform": false
     },
     "Am29F800BB": {
       "jedec_id": "0x58",
@@ -199,7 +219,8 @@
       "protocol": "jedec",
       "volts": 5,
       "manuf": "AMD",
-      "notes": "8 Mbit, bottom-boot, неuniform: 16K+8K+8K+32K+15x64K"
+      "notes": "8 Mbit, bottom-boot, неuniform: 16K+8K+8K+32K+15x64K",
+      "uniform": false
     },
     "Am29LV001BB": {
       "jedec_id": "0x6D",
@@ -214,7 +235,8 @@
       "protocol": "jedec",
       "volts": 3,
       "manuf": "AMD",
-      "notes": "1 Mbit, 3.0 V"
+      "notes": "1 Mbit, bottom-boot, неuniform: 8K+2x4K+7x16K",
+      "uniform": false
     },
     "Am29LV001BT": {
       "jedec_id": "0xED",
@@ -229,7 +251,8 @@
       "protocol": "jedec",
       "volts": 3,
       "manuf": "AMD",
-      "notes": "1 Mbit, 3.0 V"
+      "notes": "1 Mbit, top-boot, неuniform: 8K+2x4K+7x16K",
+      "uniform": false
     },
     "Am29LV016": {
       "jedec_id": null,
@@ -263,7 +286,7 @@
     },
     "Am29LV400BB": {
       "jedec_id": null,
-      "size_kib": 4096,
+      "size_kib": 512,
       "sector_kib": 64,
       "cmd_addr1": "0x555",
       "cmd_addr2": "0x2aa",
@@ -274,11 +297,12 @@
       "protocol": "jedec",
       "volts": 3,
       "manuf": "AMD",
-      "notes": "32 Mbit, 3.0 V"
+      "notes": "4 Mbit, bottom-boot, неuniform: 16K+8K+8K+32K+7x64K",
+      "uniform": false
     },
     "Am29LV400BT": {
       "jedec_id": null,
-      "size_kib": 4096,
+      "size_kib": 512,
       "sector_kib": 64,
       "cmd_addr1": "0x555",
       "cmd_addr2": "0x2aa",
@@ -289,11 +313,12 @@
       "protocol": "jedec",
       "volts": 3,
       "manuf": "AMD",
-      "notes": "32 Mbit, 3.0 V"
+      "notes": "4 Mbit, top-boot, неuniform: 16K+8K+8K+32K+7x64K",
+      "uniform": false
     },
     "Am29LV800BB": {
       "jedec_id": null,
-      "size_kib": 8192,
+      "size_kib": 1024,
       "sector_kib": 64,
       "cmd_addr1": "0x555",
       "cmd_addr2": "0x2aa",
@@ -304,11 +329,12 @@
       "protocol": "jedec",
       "volts": 3,
       "manuf": "AMD",
-      "notes": "64 Mbit, 3.0 V"
+      "notes": "8 Mbit, bottom-boot, неuniform: 16K+8K+8K+32K+15x64K",
+      "uniform": false
     },
     "Am29LV800BT": {
       "jedec_id": null,
-      "size_kib": 8192,
+      "size_kib": 1024,
       "sector_kib": 64,
       "cmd_addr1": "0x555",
       "cmd_addr2": "0x2aa",
@@ -319,7 +345,8 @@
       "protocol": "jedec",
       "volts": 3,
       "manuf": "AMD",
-      "notes": "64 Mbit, 3.0 V"
+      "notes": "8 Mbit, top-boot, неuniform: 16K+8K+8K+32K+15x64K",
+      "uniform": false
     },
     "Am29LV160DT": {
       "jedec_id": null,
@@ -334,7 +361,8 @@
       "protocol": "jedec",
       "volts": 3,
       "manuf": "AMD",
-      "notes": "16 Mbit, 3.0 V"
+      "notes": "16 Mbit, top-boot, неuniform: 16K+8K+8K+32K+31x64K",
+      "uniform": false
     },
     "Am29LV160DB": {
       "jedec_id": null,
@@ -349,7 +377,8 @@
       "protocol": "jedec",
       "volts": 3,
       "manuf": "AMD",
-      "notes": "16 Mbit, 3.0 V"
+      "notes": "16 Mbit, bottom-boot, неuniform: 16K+8K+8K+32K+31x64K",
+      "uniform": false
     },
     "Am29DL322": {
       "jedec_id": "0x22",
@@ -554,7 +583,7 @@
       "cmd_addr2": "0x2aa",
       "wide": false,
       "page": null,
-      "bypass": true,
+      "bypass": false,
       "strata": false,
       "protocol": "jedec",
       "volts": 5,
@@ -874,111 +903,6 @@
       "protocol": "jedec",
       "volts": 5,
       "manuf": "Macronix",
-      "notes": "16 Mbit"
-    },
-    "ToshibaTC58": {
-      "jedec_id": null,
-      "size_kib": 2048,
-      "sector_kib": 64,
-      "cmd_addr1": "0x555",
-      "cmd_addr2": "0x2aa",
-      "wide": false,
-      "page": null,
-      "bypass": false,
-      "strata": false,
-      "protocol": "jedec",
-      "volts": 5,
-      "manuf": "Toshiba",
-      "notes": "16 Mbit"
-    },
-    "HitachiHN28F": {
-      "jedec_id": null,
-      "size_kib": 2048,
-      "sector_kib": 64,
-      "cmd_addr1": "0x555",
-      "cmd_addr2": "0x2aa",
-      "wide": false,
-      "page": null,
-      "bypass": false,
-      "strata": false,
-      "protocol": "jedec",
-      "volts": 5,
-      "manuf": "Hitachi",
-      "notes": "16 Mbit"
-    },
-    "MitsubishiM5M": {
-      "jedec_id": null,
-      "size_kib": 2048,
-      "sector_kib": 64,
-      "cmd_addr1": "0x555",
-      "cmd_addr2": "0x2aa",
-      "wide": false,
-      "page": null,
-      "bypass": false,
-      "strata": false,
-      "protocol": "jedec",
-      "volts": 5,
-      "manuf": "Mitsubishi",
-      "notes": "16 Mbit"
-    },
-    "NECuPD": {
-      "jedec_id": null,
-      "size_kib": 2048,
-      "sector_kib": 64,
-      "cmd_addr1": "0x555",
-      "cmd_addr2": "0x2aa",
-      "wide": false,
-      "page": null,
-      "bypass": false,
-      "strata": false,
-      "protocol": "jedec",
-      "volts": 5,
-      "manuf": "NEC",
-      "notes": "16 Mbit"
-    },
-    "SharpLH": {
-      "jedec_id": null,
-      "size_kib": 2048,
-      "sector_kib": 64,
-      "cmd_addr1": "0x555",
-      "cmd_addr2": "0x2aa",
-      "wide": false,
-      "page": null,
-      "bypass": false,
-      "strata": false,
-      "protocol": "jedec",
-      "volts": 5,
-      "manuf": "Sharp",
-      "notes": "16 Mbit"
-    },
-    "STMicro": {
-      "jedec_id": null,
-      "size_kib": 2048,
-      "sector_kib": 64,
-      "cmd_addr1": "0x555",
-      "cmd_addr2": "0x2aa",
-      "wide": false,
-      "page": null,
-      "bypass": false,
-      "strata": false,
-      "protocol": "jedec",
-      "volts": 5,
-      "manuf": "ST",
-      "notes": "16 Mbit"
-    },
-    "SamsungNAND": {
-      "jedec_id": null,
-      "size_kib": 2048,
-      "sector_kib": 64,
-      "cmd_addr1": "0x555",
-      "cmd_addr2": "0x2aa",
-      "wide": false,
-      "page": null,
-      "bypass": false,
-      "strata": false,
-      "protocol": "jedec",
-      "volts": 5,
-      "manuf": "Samsung",
       "notes": "16 Mbit"
     }
   },

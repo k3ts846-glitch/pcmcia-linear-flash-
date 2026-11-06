@@ -285,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
                 break
     except OSError:
         pass
-    say(f"  версия набора: {kit_version}   (в переписке должна быть 2.16.0)")
+    say(f"  версия набора: {kit_version}   (в переписке должна быть 2.17.1)")
     try:
         md5_direct = subprocess.run(
             ["md5sum", str(pcmcia_direct)], capture_output=True, text=True
@@ -470,10 +470,10 @@ def main(argv: list[str] | None = None) -> int:
     # ---------- 4-5. СЕЛФТЕСТ / ДИАГ (только в медленном режиме) ----------
     if slow:
         sec("4. САМОПРОВЕРКА НАБОРА (--selftest)")
-        run_py(30, str(pcmcia_ctl), "selftest", "--fast")
+        run_py(30, str(PCMCIA_CTL), "selftest", "--fast")
 
         sec("5. РАЗБОР ЯДРА СРЕДСТВАМИ НАБОРА (--diag)")
-        run_py(60, str(pcmcia_ctl), "diag")
+        run_py(60, str(PCMCIA_CTL), "diag")
 
     # ---------- 6. ЧТЕНИЕ COMMON MEMORY ----------
     sec("6. ЧТЕНИЕ COMMON MEMORY КАРТЫ (--probe, настроенное окно)")
