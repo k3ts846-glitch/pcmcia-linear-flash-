@@ -37,7 +37,7 @@ def check_image(path, writing):
 
 
 def run(target, kit_dir, action, image="", remote_path="", assume_yes=False,
-        work_dir="", resume=False, journal="", backup="", follow=""):
+        work_dir="", resume=False, journal="", backup=""):
     """Выполнить read, write, verify или запись без драйвера."""
     writing = action in ("write", "fwwrite")
     local_image = ""
@@ -50,7 +50,7 @@ def run(target, kit_dir, action, image="", remote_path="", assume_yes=False,
 
     remote_cmd = rctl.build(action, remote_path, assume_yes,
                             resume=resume, journal=journal,
-                            backup=backup, follow=follow)
+                            backup=backup)
     steps.describe(target, action, remote_cmd, remote_path)
 
     if not steps.connect(target):

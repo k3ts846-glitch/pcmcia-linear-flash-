@@ -232,7 +232,7 @@ def run_remote(args, action, directory, target, confirmed_in_menu=False):
         rc, text = cmd_image.run(target, directory, action, image, remote_path,
                                  args.yes, os.getcwd(),
                                  resume=args.resume, journal=args.journal,
-                                 backup=args.backup, follow=args.follow)
+                                 backup=args.backup)
         if args.follow and action == "write":
             _follow_journal(target, directory, args.journal)
         # Карта износа и карта отказов: при неудачной записи/стирании

@@ -22,14 +22,17 @@ REMOTE_DIR = "/tmp/pcmcia-ctl"
 
 # Файлы набора, которые нужны на ноутбуке. Пульт, справочник и тесты остаются
 # на рабочей машине: это части набора для Windows, а не рабочие файлы Debian.
+# ВАЖНО: имена должны существовать в наборе. Здесь были planb.sh и
+# pcmcia_flash.sh - таких файлов нет (есть planb.py и linux/pcmcia_flash.py),
+# поэтому planb.py не уезжал на ноутбук, и run_remote.py --planb на нём падал
+# с «planb.py не найден».
 REMOTE_FILES = (
     "pcmcia_ctl.py",
     "windows/legacy/pcmcia_direct.py",
     "collect_all.py",
     "run_remote.py",
     "remote_collect.py",
-    "planb.sh",
-    "pcmcia_flash.sh",
+    "planb.py",
 )
 
 # Без этих файлов пульт работать не должен: если их нет, распакован не тот

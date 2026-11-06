@@ -16,13 +16,15 @@ from .addressing import chip_abs, chip_local, chip_of
 from .constants import (
     AMD_BUFFER_CONFIRM, AMD_BUFFER_SETUP, AMD_READ_CFI, AMD_READ_ID, AMD_RESET,
     DQ5, DQ7, FLASH_POLLS, INTEL_BUFFER_CONFIRM, INTEL_BUFFER_SETUP,
+    INTEL_BUFFER_SIZE,
     INTEL_CUI_CLEAR_SR, INTEL_CUI_ERASE_CONFIRM, INTEL_CUI_ERASE_SETUP,
     INTEL_CUI_READ_ID, INTEL_CUI_READ_SR, INTEL_CUI_RESET, INTEL_CUI_SUSPEND,
     INTEL_CUI_WRITE_SETUP, INTEL_READ_CFI, INTEL_READ_ID, INTEL_RESET,
     NOR_BYPASS, NOR_CMD_ADDR1, NOR_CMD_ADDR2, NOR_ERASE_CHIP, NOR_ERASE_RESUME,
     NOR_ERASE_SECTOR, NOR_ERASE_SETUP, NOR_ERASE_SUSPEND, NOR_PROGRAM, NOR_RESET,
     NOR_SECTOR_PROTECT,
-    NOR_UNLOCK1, NOR_UNLOCK2, SR_ERASE_FAIL, SR_READY, SR_VPP_LOW, SR_WRITE_FAIL,
+    NOR_UNLOCK1, NOR_UNLOCK2, SR_ERASE_FAIL, SR_PROTECT, SR_READY, SR_SUSPEND,
+    SR_VPP_LOW, SR_WRITE_FAIL,
     SECTOR,
 )
 from .errors import DirectError
@@ -115,7 +117,11 @@ class NorBus:
             self.ensure(card_off + got, 1)
             take = min(n - got, self._base + self._len - (card_off + got))
             if take <= 0:
-                continue
+                # Окно не покрывает адрес (он за концом карты). Прежде здесь
+                # стоял continue - то есть бесконечный цикл вместо ошибки.
+                raise DirectError(
+                    f"адрес {card_off + got:#x} за пределами карты "
+                    f"(окно {self._base:#x}+{self._len:#x})")
             start = self._off + card_off + got - self._base
             out += self._m[start:start + take]
             got += take
@@ -130,11 +136,16 @@ class NorFlashIO:
 
     def __init__(self, bus, chips=2, sector=SECTOR, verbose=False, polls=None,
                  cmd=(NOR_CMD_ADDR1, NOR_CMD_ADDR2), wide=False, page=1,
-                 bypass=False, strata=False, name="", protocol="jedec"):
+                 bypass=False, strata=False, name="", protocol="jedec",
+                 sector_map=None, ro=False, ro_why=""):
         self.bus = bus
         self.chips = max(int(chips or 1), 1)
         # sector здесь - В АДРЕСАХ КАРТЫ (уже умножен на число чипов).
         self.sector = int(sector or SECTOR)
+        # sector_map - карта секторов ОДНОГО чипа: [(размер, число), ...] от
+        # младших адресов. Пусто - карта однородная (см. span()).
+        self.sector_map = [(int(size), int(count))
+                           for size, count in (sector_map or [])]
         self.protocol = protocol or "jedec"
         self.strata = bool(strata)                  # AMD/Fujitsu StrataFlash 25h/D0h
         self.verbose = verbose
@@ -147,8 +158,27 @@ class NorFlashIO:
         self.page_card = self.page * self.chips
         self.bypass = bool(bypass)                  # Unlock Bypass 20h есть?
         self._bypass_active = False                 # сеанс bypass открыт?
+        self._bypass_broken = False                 # bypass не работает?
         self._erase_suspended = False               # стирание приостановлено?
         self.name = name
+        # ro - микросхема в этом наборе ТОЛЬКО ЧИТАЕТСЯ: её команда стирания
+        # либо отсутствует, либо требует 12 В на Vpp, либо набор её не знает.
+        # Пишем отказ с причиной, а не «пробуем A0h и смотрим».
+        self.ro = bool(ro)
+        self.ro_why = str(ro_why or "")
+
+    # --- отказ от записи ---------------------------------------------------
+    def _readonly(self, action):
+        """(False, почему) для микросхем, которые набор только читает.
+
+        Возвращает None, если запись разрешена. Причина берётся из таблицы
+        геометрии (поле why) - это даташитная формулировка, а не догадка.
+        """
+        if not self.ro:
+            return None
+        why = self.ro_why or "её команды не подтверждены даташитом"
+        return False, (f"{self.name or 'микросхема'}: {action} в этом наборе "
+                       f"не выполняется - {why}")
 
     # --- адреса команд -----------------------------------------------------
 
@@ -173,6 +203,41 @@ class NorFlashIO:
 
     def read_byte(self, card_off):
         return self.bus.rd(card_off)
+
+    def span(self, card_off):
+        """Границы сектора карты, содержащего адрес: (начало, размер).
+
+        Для boot-микросхем это единственный правильный способ: секторы там
+        разного размера (16K + 8K + 8K + 32K + N x 64K), и «округление по
+        64 КиБ» стёрло бы не то.
+        """
+        if not self.sector_map:
+            base = card_off - (card_off % self.sector)
+            return base, self.sector
+        off = 0
+        for size, count in self.sector_map:
+            size *= self.chips                     # в адресах карты
+            if card_off < off + size * count:
+                return off + ((card_off - off) // size) * size, size
+            off += size * count
+        size = self.sector_map[-1][0] * self.chips
+        return max(off - size, 0), size
+
+    def spans(self, length):
+        """Секторы карты, покрывающие первые length байт: [(начало, размер)]."""
+        if not self.sector_map:
+            return [(off, min(self.sector, length - off))
+                    for off in range(0, length, self.sector)]
+        out = []
+        off = 0
+        for size, count in self.sector_map:
+            size *= self.chips
+            for _ in range(count):
+                if off >= length:
+                    return out
+                out.append((off, min(size, length - off)))
+                off += size
+        return out
 
     # --- команды -----------------------------------------------------------
 
@@ -261,14 +326,23 @@ class NorFlashStatus:
     def erase_suspend(self):
         """Приостановка стирания (команда B0h).
 
-        Позволяет прервать стирание сектора на время до 20 мкс, чтобы
-        прочитать данные из другого сектора. После приостановки нужно
-        вызвать erase_resume() для продолжения.
+        Позволяет приостановить стирание сектора, чтобы прочитать или записать
+        данные в ДРУГОЙ сектор, а затем продолжить (erase_resume,
+        команда 30h). Пауза не ограничена 20 мкс - ограничен только отклик на
+        саму команду B0h.
 
         Возвращает True если команда принята, False если не поддерживается.
         """
-        if self.protocol != "jedec" or not self.bypass:
-            # Erase Suspend работает у микросхем с CFI (D-ревизия и новее)
+        if self.protocol == "intel":
+            # У Intel приостановка ЕСТЬ: Erase Suspend B0h (таблица 3
+            # даташита 290429-008). Прежний комментарий «у Intel 28F
+            # приостановки нет» был неверен, а сама команда B0h лежала в
+            # константах неиспользованной.
+            for chip in range(self.chips):
+                self._intel_send(chip, INTEL_CUI_SUSPEND)
+            self._erase_suspended = True
+            return True
+        if self.protocol != "jedec":
             return False
         self._send(self.cmd1, NOR_ERASE_SUSPEND)
         self._erase_suspended = True
@@ -279,6 +353,12 @@ class NorFlashStatus:
 
         Возвращает True если команда принята.
         """
+        if self.protocol == "intel":
+            # Erase Resume - D0h, та же команда, что Erase Confirm.
+            for chip in range(self.chips):
+                self._intel_send(chip, INTEL_CUI_ERASE_CONFIRM)
+            self._erase_suspended = False
+            return True
         if self.protocol != "jedec":
             return False
         self._send(self.cmd1, NOR_ERASE_RESUME)
@@ -289,10 +369,11 @@ class NorFlashStatus:
         """Intel: сброс статусного регистра (биты 3,4,5 ставятся навсегда)."""
         if self.protocol != "intel":
             return
+        # По байту на чип (см. _intel_send): прежняя запись «50h дважды
+        # в один чип» на карте с одним чипом давала команду + данные.
         for chip in range(self.chips):
             try:
-                self.bus.wr_many(chip_abs(0, chip, self.chips),
-                                 bytes([INTEL_CUI_CLEAR_SR, INTEL_CUI_CLEAR_SR]))
+                self._intel_send(chip, INTEL_CUI_CLEAR_SR)
             except (DirectError, OSError, ValueError):
                 pass
 
@@ -301,9 +382,24 @@ class NorFlashStatus:
         if self.protocol != "intel":
             return self.read_byte(card_off)
         chip = chip_of(card_off, self.chips)
-        self.bus.wr_many(chip_abs(0, chip, self.chips),
-                         bytes([INTEL_CUI_READ_SR, INTEL_CUI_READ_SR]))
+        self._intel_send(chip, INTEL_CUI_READ_SR)
         return self.read_byte(card_off)
+
+    def _clear_status_and_reset(self, card_off):
+        """Очистить статус (50h) и вернуть чип в режим массива (FFh).
+
+        Даташит 28F008SA 290429-008, §4.4: биты SR.3/4/5 ставятся автоматом
+        (WSM) и снимаются ТОЛЬКО командой Clear Status Register (50h). FFh -
+        это Read Array/Reset, он их не трогает. Без 50h первая же ошибка Vpp
+        остаётся в регистре, и каждая следующая запись/стирание сразу получает
+        тот же отказ: карта выглядит мёртвой до передёргивания питания.
+        """
+        chip = chip_of(card_off, self.chips)
+        try:
+            self._intel_send(chip, INTEL_CUI_CLEAR_SR)
+        except (DirectError, OSError, ValueError):
+            pass
+        self._intel_send(chip, INTEL_CUI_RESET)
 
     def _status_ok(self, card_off, want_value=None):
         """(готово, объяснение отказа) для текущей операции.
@@ -317,13 +413,29 @@ class NorFlashStatus:
             return st, ""
         if not (st & SR_READY):
             return st, ""                      # ещё идёт
+        if st & SR_PROTECT:
+            # Отказ оставляет CUI в режиме статуса: дальше чтение массива
+            # вернуло бы байт статуса. Чистим статус (50h) и возвращаем чип в
+            # режим массива (FFh).
+            self._clear_status_and_reset(card_off)
+            return st, ("блок защищён (WPPS=1, block lock). У 28F004S5/008S5/016S5 снять "
+                        "программную защиту нельзя: Intel прошивает master "
+                        "lock-bit на заводе (erratum #2, 297796-007), нужны "
+                        "12 В на RP#, а слот их не даёт")
         if st & SR_VPP_LOW:
+            self._clear_status_and_reset(card_off)
             return st, ("нет напряжения программирования (VPPS=1): этой "
-                        "микросхеме нужны 12 В на Vpp, а слот их не даёт")
+                        "микросхеме нужны 12 В на Vpp, а слот их не даёт; "
+                        "статус очищен (50h), чтобы следующая попытка не "
+                        "получила тот же застарелый бит")
         if st & SR_ERASE_FAIL:
-            return st, "микросхема сообщает: стирание не удалось (ESS=1)"
+            self._clear_status_and_reset(card_off)
+            return st, ("микросхема сообщает: стирание не удалось (ESS=1); "
+                        "статус очищен (50h)")
         if st & SR_WRITE_FAIL:
-            return st, "микросхема сообщает: запись не удалась (BWS=1)"
+            self._clear_status_and_reset(card_off)
+            return st, ("микросхема сообщает: запись не удалась (BWS=1); "
+                        "статус очищен (50h)")
         return st, ""
 
     def read_id(self):
@@ -359,6 +471,9 @@ class NorFlashProgramming:
         bypass должен быть включён enter_bypass() перед пакетной записью и
         выключен exit_bypass() после.
         """
+        refuse = self._readonly("запись")
+        if refuse:
+            return refuse
         if self.protocol == "intel":
             return self._intel_program(card_off, value)
         if self.wide:
@@ -368,14 +483,25 @@ class NorFlashProgramming:
             return True, ""
         if before != 0xFF:
             return False, f"байт не стёрт ({before:#04x}) — нужна чистка сектора"
-        if self.bypass:
+        if self.bypass and not self._bypass_broken:
             # Автовход в Unlock Bypass: первая запись открывает сеанс,
             # последующие пишут за 2 цикла без повторной разблокировки.
             # Завершить сеанс нужно exit_bypass() (или reset()).
             if not self._bypass_active:
                 self.enter_bypass()
                 self._bypass_active = True
-            return self.program_byte_bypass(card_off, value)
+            ok, why = self.program_byte_bypass(card_off, value)
+            if ok:
+                return ok, why
+            # Микросхема не приняла Unlock Bypass. Так бывает: JEDEC ID у
+            # семейства один (01ADh у Am29F016, B и D), а команда 20h есть
+            # только у поздних ревизий. Откатываемся на обычную запись A0h -
+            # один раз, с предупреждением, и больше bypass не пробуем.
+            self.exit_bypass()
+            self._bypass_active = False
+            self._bypass_broken = True
+            print("  ВНИМАНИЕ: Unlock Bypass (20h) не сработал: " + why
+                  + ". Дальше пишу обычной командой A0h - медленнее, но верно.")
         self.unlock()
         self._send(self.cmd1, NOR_PROGRAM)
         self.bus.wr(card_off, value)
@@ -412,6 +538,9 @@ class NorFlashProgramming:
         0xFF после стирания). Нужен ровно один сценарий - «записать этот
         байт», поэтому значение берётся из card_off, а пара читается заранее.
         """
+        refuse = self._readonly("запись")
+        if refuse:
+            return refuse
         pair_at = card_off - (card_off % 2)
         before = self.read_byte(card_off)
         value = before if value is None else value
@@ -436,8 +565,12 @@ class NorFlashProgramming:
         data - то, что должно оказаться в карте; 0xFF означает «не трогать»
         (в NOR запись умеет только 1 -> 0, а стёртое состояние и есть 0xFF).
         Если page=1, работает обычная побайтовая запись.
-        У Intel 28F/StrataFlash с page > 1 используется буферная запись 25h/D0h.
+        У Intel 28F/StrataFlash с page > 1 используется буферная запись
+        E8h/N/D0h (Intel CUI), у AMD StrataFlash — 25h/D0h (JEDEC).
         """
+        refuse = self._readonly("запись страницы")
+        if refuse:
+            return refuse
         if len(data) > self.page_card:
             return False, f"за один раз не больше {self.page_card} байт"
         if self.page <= 1 or len(data) <= 1:
@@ -496,19 +629,22 @@ class NorFlashProgramming:
         return bytes(page)
 
     def _program_page_intel(self, card_off, data):
-        """StrataFlash буферная запись: 25h setup, данные, D0h confirm, опрос SR.
+        """Буферная запись Intel CUI: E8h, счётчик N, данные, D0h, опрос SR.
 
-        Последовательность (по даташиту 28F016S5 / M28F016S5):
-          1. Записать 25h в адрес буфера каждого чипа (Write-to-Buffer Setup)
-          2. Записать данные в буфер каждого чипа (по байту на чип за такт)
-          3. Записать D0h в адрес буфера каждого чипа (Buffer Write Confirm)
-          4. Опросить статусный регистр (70h) каждого чипа до WSMS=1
-          5. Сбросить каждый чип (FFh)
+        Последовательность (даташиты Intel 28F/StrataFlash, «Write to Buffer»):
+          1. E8h по адресу буфера каждого чипа (Write-to-Buffer, слово)
+          2. N = число байт минус один — тоже слово
+          3. N+1 слово данных; младший байт - чип 0, старший - чип 1
+          4. D0h (Write Confirm) — после него начинается программирование
+          5. Опросить статусный регистр (70h) каждого чипа до WSRS=1
+          6. Сбросить каждый чип (FFh)
 
-        Каждый чип имеет свой буфер. В 16-битном режиме с 2 чипами:
-        карт-байт start+i*chips+chip → чип chip, смещение i внутри чипа.
-        page_card = page * chips байт на карте, page байт на чип.
+        Раньше здесь были 25h и побайтовые данные: 25h - команда AMD, счётчика
+        не было, а байтовые записи CUI не принимает (он ждёт слово).
         """
+        if self.page > INTEL_BUFFER_SIZE:
+            return False, (f"буфер записи Intel не больше {INTEL_BUFFER_SIZE} байт, "
+                           f"а в таблице page={self.page}")
         start = card_off - (card_off % self.page_card)
         if card_off != start or len(data) != self.page_card:
             return self.program_page(start, self._pad_page(start, data, card_off))
@@ -518,24 +654,27 @@ class NorFlashProgramming:
             if b != 0xFF and self.read_byte(start + i) != 0xFF:
                 return False, f"байт {start + i:#x} не стёрт"
 
-        # 1. 25h Setup — посылаем в каждый чип по адресу буфера (смещение 0 внутри чипа)
-        for chip in range(self.chips):
-            self._intel_send(chip, INTEL_BUFFER_SETUP, 0)
+        # 1. E8h Write-to-Buffer — в каждый чип по адресу буфера
+        # Команда Intel - СЛОВО, и оно одно на всю пару чипов: писать её
+        # «каждому чипу» нельзя - второй такой же байт чип прочтёт как
+        # счётчик N (проверено моделью).
+        self._intel_send(0, INTEL_BUFFER_SETUP, 0)
 
-        # 2. Пишем данные в буфер каждого чипа
-        # data лежит в порядке карты: start+0, start+1, start+2, ...
-        # chip 0 получает data[0], data[2], data[4]... (чётные)
-        # chip 1 получает data[1], data[3], data[5]... (нечётные)
+        # 2. Счётчик N = число байт минус один, словом (младший байт - N)
+        count = self.page - 1
+        self.bus.wr_many(chip_abs(0, 0, self.chips), bytes([count, 0])[:max(self.chips, 1)])
+
+        # 3. Данные — словом: чип 0 в младшем байте, чип 1 в старшем
         for i in range(self.page):
+            word = bytearray(2)
             for chip in range(self.chips):
                 byte_idx = i * self.chips + chip
-                val = data[byte_idx] if byte_idx < len(data) else 0xFF
-                addr = chip_abs(i, chip, self.chips)
-                self.bus.wr(addr, val)
+                word[chip] = data[byte_idx] if byte_idx < len(data) else 0xFF
+            self.bus.wr_many(chip_abs(i, 0, self.chips),
+                             bytes(word[:max(self.chips, 1)]))
 
-        # 3. D0h Confirm — посылаем в каждый чип
-        for chip in range(self.chips):
-            self._intel_send(chip, INTEL_BUFFER_CONFIRM, 0)
+        # 4. D0h Confirm — посылаем в каждый чип
+        self._intel_send(0, INTEL_BUFFER_CONFIRM, 0)   # тоже одно слово
 
         # 4. Ожидание готовности через статусный регистр каждого чипа
         for chip in range(self.chips):
@@ -660,7 +799,11 @@ class NorFlashProgramming:
         дублируются в оба байта.
         """
         base = chip_abs(addr_local or 0, chip, self.chips)
-        self.bus.wr_many(base, bytes([op, op]))
+        # Ровно по байту на чип пары: у карты с ДВУМЯ чипами это два байта
+        # (команда доходит до обоих), у карты с ОДНИМ - один байт. Прежнее
+        # bytes([op, op]) на одном чипе давало команду, а следом уже данные
+        # (40h как данные) - запись уезжала в мусор.
+        self.bus.wr_many(base, bytes([op] * max(self.chips, 1)))
         return base
 
     def _intel_word_base(self, card_off):
@@ -701,7 +844,7 @@ class NorFlashProgramming:
 
     def _intel_erase(self, card_off):
         """Стирание блока по командам CUI: 20h (setup), затем D0h (confirm)."""
-        base = card_off - (card_off % self.sector)
+        base, _size = self.span(card_off)
         for chip in range(self.chips):
             local = chip_local(base, self.chips)
             self._intel_send(chip, INTEL_CUI_ERASE_SETUP, local)
@@ -711,6 +854,12 @@ class NorFlashProgramming:
                 st, why = self._status_ok(addr)
                 if why:
                     return False, f"чип {chip}, блок {base:#x}: {why}"
+                if st & SR_SUSPEND:
+                    # WSMS=1 при приостановке тоже, но блок не стёрт: без
+                    # этой проверки «пауза» выглядела бы успешным стиранием.
+                    return False, (f"чип {chip}, блок {base:#x}: стирание "
+                                   "приостановлено (SR.6=1) — сначала Erase "
+                                   "Resume (D0h), потом повторить")
                 if st & SR_READY:
                     break
             else:
@@ -754,7 +903,10 @@ class NorFlashErase:
         Если послать одну команду по чётному адресу, второй чип не сотрётся,
         и запись в нечётные байты провалится с «байт не стёрт».
         """
-        base = card_off - (card_off % self.sector)
+        refuse = self._readonly("стирание сектора")
+        if refuse:
+            return refuse
+        base, _size = self.span(card_off)
         if self.protocol == "intel":
             return self._intel_erase(base)
         # base - АБСОЛЮТНОЕ смещение; чипу нужен адрес ВНУТРИ него, поэтому
@@ -765,8 +917,12 @@ class NorFlashErase:
             self.unlock()
             self._send(self.cmd1, NOR_ERASE_SETUP)
             self.unlock()
-            self._send(self.cmd1, NOR_ERASE_SECTOR)
-            self.bus.wr(addr, 0xFF)
+            # Шестой цикл - 30h ПО АДРЕСУ СЕКТОРА (даташит, «Sector Erase
+            # Command Sequence»; так же делают flashrom: issuecmd(0x30, page)
+            # и ядро Linux: map_write(map, cfi->sector_erase_cmd, adr)).
+            # Раньше здесь стояло _send(self.cmd1, ...) + wr(addr, 0xFF):
+            # команда уходила в 0x555, то есть ВСЕГДА стирала сектор 0.
+            self.bus.wr(addr, NOR_ERASE_SECTOR)
             ok, why = self._wait_erase(addr)
             if not ok:
                 self.reset()
@@ -779,6 +935,9 @@ class NorFlashErase:
         В таблице 9 документа её нет: только пошаговое стирание блоков.
         Поэтому здесь честный отказ, а не «попробуем 10h и посмотрим».
         """
+        refuse = self._readonly("стирание чипа")
+        if refuse:
+            return refuse
         if self.protocol == "intel":
             return False, ("у Intel 28F008SA нет команды «стереть весь чип»: "
                            "стирать нужно поблочно (это и делает обычная запись)")

@@ -84,7 +84,12 @@ def _log(text: str) -> None:
 
 
 def say(text: str = "") -> None:
-    """Напечатать и продублировать в лог."""
+    """Напечатать и продублировать в лог.
+
+    В режиме --json человеческий текст остаётся (так задумано: отчёт читают
+    глазами, а машина ищет строку «JSON {...}»). Важно другое - эта строка
+    должна быть ВСЕГДА, в том числе когда работать не с чем: см. need_root.
+    """
     print(text)
     _log(text)
 
@@ -289,7 +294,12 @@ def need_root(action: str) -> bool:
         # Для тестов: пропускаем проверку root, но предупреждаем.
         warn(f"пропускаю проверку root (PCMCIA_SKIP_ROOT=1)")
         return True
-    err(f"нужен root: sudo python3 {sys.argv[0]} {action}")
+    message = f"нужен root: sudo python3 {sys.argv[0]} {action}"
+    if JSON_MODE:
+        import json
+        print("JSON " + json.dumps({"error": message, "action": action,
+                                    "need_root": True}, ensure_ascii=False))
+    err(message)
     return False
 
 
@@ -1270,7 +1280,9 @@ def _dispatch(args: argparse.Namespace, state: CardState) -> int:
         return act_chip()
     if args.action == "selftest":
         return act_selftest(full=args.full)
-    parser.print_help()
+    # Здесь нет локального parser: _dispatch - отдельная функция, ей парсер
+    # не передают. Раньше это был NameError при запуске без действия.
+    build_parser().print_help()
     return 2
 
 

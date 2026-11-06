@@ -25,8 +25,14 @@ def default_remote_image(kind, stamp=None):
 
 
 def build(action, remote_path="", assume_yes=False, full=False,
-          resume=False, journal="", backup="", follow="", json_out=False):
-    """Собрать команду для ноутбука. Пустая строка — действие неизвестно."""
+          resume=False, journal="", backup=""):
+    """Собрать команду для ноутбука. Пустая строка — действие неизвестно.
+
+    В сигнатуре раньше были follow и json_out, но они не участвовали в сборке
+    команды: «следить за журналом» делает пульт после записи (cli._follow_
+    journal), а --json для info/canwrite/diag вписан в команду постоянно.
+    Параметры-обманки убраны, чтобы не создавать ложного впечатления.
+    """
     yes = " --yes" if assume_yes else ""
     resume_opt = " --resume" if resume else ""
     journal_opt = f" --journal '{journal}'" if journal else ""

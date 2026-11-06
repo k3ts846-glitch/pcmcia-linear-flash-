@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.16.0"          # версия набора: печатается в отчёте и в --selftest
+KIT_VERSION = "2.17.12"          # версия набора: печатается в отчёте и в --selftest
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -813,18 +813,51 @@ VENDORS = {0x01: "AMD", 0x04: "Fujitsu", 0x1C: "Atmel", 0x20: "STMicroelectronic
 # Значение: (имя микросхемы, ёмкость в Мбит). Коды Device ID из даташитов
 # AMD Am29F016/016B/016D (18805 rev. D, 21444 rev. E5) и Fujitsu MBM29F016A.
 # ёмкость нужна cis_capacity() для подсчёта числа чипов: всего_Мбит / на_чип_Мбит.
+# Сверено с реестром src/pcmcia_flash/data/jedec_registry.json (источники:
+# flashrom flashchips.h, ядро Linux jedec_probe.c, даташиты AMD).
+# ВАЖНО, что было не так до 2.17.2: ёмкости стояли с ошибкой в 2-8 раз
+# (0xAB назывался «32 Мбит» вместо 4, 0xD5 - «16 Мбит» вместо 8, 0x34 -
+# «256 Мбит»), а имена были без ревизии. Ёмкость идёт в cis_capacity() и
+# делит ёмкость карты на число чипов, поэтому такая ошибка давала неверное
+# число микросхем, то есть неверную геометрию и порчу соседних секторов.
 AMD_PARTS = {
-    0xAD: ("Am29F016", 16),   # 2 MiB = 16 Mbit, 32 x 64 КиБ, 5 В, CFI только у D-ревизии
-    0x58: ("Am29F800", 8),    # 1 MiB = 8 Mbit
-    0xAB: ("Am29F400", 32),   # 4 MiB = 32 Mbit
-    0xA4: ("Am29F040", 4),    # 512 KiB = 4 Mbit
-    0xD5: ("Am29F200", 16),   # 2 MiB = 16 Mbit
-    0x01: ("Am29F010", 8),    # 1 MiB = 8 Mbit
-    0x34: ("Am29F032/Am29F033", 256),  # 32 MiB = 256 Mbit
-    0xBA: ("Am29F080", 64),   # 8 MiB = 64 Mbit (по даташиту серии)
-    0xB4: ("Am29LV016", 16),  # 2 MiB = 16 Mbit, 3 В
-    0x44: ("MBM29F016", 16),  # Fujitsu, аналог Am29F016, 2 MiB = 16 Mbit
+    0x20: ("Am29F010", 1),    # 128 КиБ = 1 Мбит, 8 x 16 КиБ
+    0x22: ("Am29DL322", 32),  # 4 МиБ = 32 Мбит, StrataFlash
+    0x23: ("Am29F400AT", 4),  # 512 КиБ = 4 Мбит, top-boot
+    0x3D: ("Am29F017D", 16),  # 2 МиБ = 16 Мбит
+    0x41: ("Am29F032B", 32),  # 4 МиБ = 32 Мбит
+    0x4F: ("Am29LV040B", 4),  # 512 КиБ = 4 Мбит, 3 В
+    0x51: ("Am29F200AT", 2),  # 256 КиБ = 2 Мбит, top-boot
+    0x57: ("Am29F200AB", 2),  # 256 КиБ = 2 Мбит, bottom-boot
+    0x58: ("Am29F800BB", 8),  # 1 МиБ = 8 Мбит, bottom-boot
+    0x6D: ("Am29LV001BB", 1), # 128 КиБ = 1 Мбит, 3 В, boot-сектора
+    0xA4: ("Am29F040", 4),    # 512 КиБ = 4 Мбит, 64 КиБ секторы
+    0xAB: ("Am29F400AB", 4),  # 512 КиБ = 4 Мбит, bottom-boot
+    0xAD: ("Am29F016", 16),   # 2 МиБ = 16 Мбит, 32 x 64 КиБ; CFI у D-ревизии
+    0xBA: ("Am29F080B", 8),   # 1 МиБ = 8 Мбит, B-ревизия
+    0xD5: ("Am29F080", 8),    # 1 МиБ = 8 Мбит, 16 x 64 КиБ
+    0xD6: ("Am29F800BT", 8),  # 1 МиБ = 8 Мбит, top-boot
+    0xED: ("Am29LV001BT", 1), # 128 КиБ = 1 Мбит, 3 В, top-boot
 }
+# Fujitsu отвечает своим вендор-кодом 04h, коды устройств те же AMD.
+FUJITSU_PARTS = {
+    0xAD: ("MBM29F016A", 16), # 2 МиБ = 16 Мбит, аналог Am29F016
+    0xA4: ("MBM29F040C", 4),  # 512 КиБ = 4 Мбит
+}
+# STMicroelectronics: вендор 20h; у M29F400B коды 00D5h (top-boot) и 00D6h
+# (bottom-boot) - даташит «M29F400BT/M29F400BB», раздел Electronic Signature.
+# Это ДРУГИЕ коды, чем у AMD при её вендоре 01h (там D5h - Am29F080).
+STMICRO_PARTS = {
+    0xD5: ("M29F400BT", 4),   # 512 КиБ = 4 Мбит, top-boot
+    0xD6: ("M29F400BB", 4),   # 512 КиБ = 4 Мбит, bottom-boot
+}
+VENDOR_PARTS = {0x01: AMD_PARTS, 0x04: FUJITSU_PARTS, 0x20: STMICRO_PARTS}
+
+
+def vendor_part(vid, did):
+    """(имя, ёмкость в Мбит) по паре JEDEC ID или None, если код не сверен."""
+    table = VENDOR_PARTS.get(vid) or {}
+    return table.get(did)
 #
 # ПРО Vpp: сколько вольт нужно микросхеме для стирания и записи.
 #
@@ -839,17 +872,29 @@ AMD_PARTS = {
 VPP126 = {"Am28F256", "Am28F512", "Am28F010", "Am28F020", "28F256", "28F512",
           "28F010", "28F020",
           "D28F010", "D28F020", "LH28F010", "LH28F020",
-          "M28F008", "M28F002", "M28F004", "M28F016", "M28F102"}
+          "M28F008", "M28F016", "M28F102"}
 VPP5 = {"Am29F016", "Am29F800", "Am29F400", "Am29F040", "Am29F200", "Am29F010",
         "Am29F032/Am29F033", "Am29F080", "Am29LV016", "MBM29F016",
+        # имена с ревизией (boot-чипы и B-ревизии) - тоже 5.0 V only
+        "Am29F200AB", "Am29F200AT", "Am29F400AB", "Am29F400AT",
+        "Am29F800BB", "Am29F800BT", "Am29F080B", "Am29F017D", "Am29F032B",
+        "Am29LV001BB", "Am29LV001BT", "Am29LV040B", "Am29LV400BB",
+        "Am29LV400BT", "Am29LV800BB", "Am29LV800BT", "Am29LV160DB",
+        "Am29LV160DT", "MBM29F016A", "MBM29F040C",
+        # Fujitsu/Spansion и ST: 2 и 4 Мбит boot-block, 5.0 V only
+        "MBM29F002TC", "MBM29F002BC", "MBM29F004TC", "MBM29F004BC",
+        "M29F002BT", "M29F002BB", "M29F400BT", "M29F400BB",
         "HN28F010", "HN28F020", "HN28F100",
-        "M5M29F010", "M5M29F020", "M5M29F400",
+        "M5M29F010", "M5M29F020",
         "MX29F1610", "MX29F3210",
         "SST39VF010", "SST39VF020", "SST39VF040", "SST39VF080",
         "TC58FVT160", "TC58FVT320",
         # AMD/Fujitsu StrataFlash — 5 В или 3 В, VPP не нужен
         "Am29PL320", "Am29PL640", "Am29PL1280",
         "Am29DL322", "Am29DL323", "Am29DL642", "Am29DL643",
+        "Am29DL322DB", "Am29DL322DT", "Am29DL323DB", "Am29DL323DT",
+        "Am29DL324DB", "Am29DL324DT", "MBM29DL322BE", "MBM29DL322TE",
+        "Am29LV033C",
         "Am29GL064", "Am29GL128", "Am29GL256", "Am29GL512", "Am29GL1024",
         "MBM29DL322", "MBM29DL642", "MBM29GL064", "MBM29GL128"}
 # Intel Series 2 - это 28F 5-вольтовая серия: запись без 12 В, но у части
@@ -868,8 +913,9 @@ def vpp_need(info):
             vid, did = int(j[0:2], 16), int(j[2:4], 16)
         except ValueError:
             vid = did = None
-        if vid == 0x01 and did in AMD_PARTS:
-            name = AMD_PARTS[did][0]
+        part = vendor_part(vid, did)
+        if part:
+            name = part[0]
             if name in VPP126:
                 return 12, f"по JEDEC: {name} (Vpp 12 В выведен наружу)"
             if name in VPP5:
@@ -1061,8 +1107,9 @@ def cis_capacity(info, strings):
             vid = did = None
         if vid in VENDORS:
             line = f"чипы (JEDEC 0x{vid:02x})    : {VENDORS[vid]}"
-            if vid == 0x01 and did in AMD_PARTS:
-                part, mbit = AMD_PARTS[did]
+            info_part = vendor_part(vid, did)
+            if info_part:
+                part, mbit = info_part
                 line += f" {part} ({mbit} Мбит)"
                 if mbits and mbit:
                     n = max(1, round(max(mbits) / mbit))
@@ -2501,7 +2548,7 @@ NOR_UNLOCK1 = 0xAA
 NOR_UNLOCK2 = 0x55
 NOR_SECTOR_PROTECT = 0xA6  # чтение состояния защиты групп секторов (Am29F016D)
 NOR_ERASE_SUSPEND = 0xB0   # приостановка стирания (Am29F016D)
-NOR_ERASE_RESUME = 0x30    # продолжение стирания (共享 с командой сектора)
+NOR_ERASE_RESUME = 0x30    # то же значение, что и Erase Sector (так у AMD)
 DQ7 = 0x80
 DQ5 = 0x20
 # Intel 28F008SA/28F016SA: не DQ7/DQ5, а статусный регистр (документация
@@ -2515,6 +2562,15 @@ SR_READY = 0x80
 SR_ERASE_FAIL = 0x20
 SR_WRITE_FAIL = 0x10
 SR_VPP_LOW = 0x08
+# SR.6 - erase suspend status (таблица 4 даташита 290429-008, 28F008SA):
+# 1 = стирание приостановлено командой B0h. WSMS (бит 7) при этом уже равен 1,
+# поэтому без отдельной проверки «приостановленное» стирание выглядит
+# завершённым - и набор стирает блок, который на самом деле не стёрт.
+SR_SUSPEND = 0x40
+# WPPS (бит 1): «device protect» - операция попала в защищённый блок.
+# У 28F004S5/008S5/016S5 (297796-007, erratum #2) мастер-бит блокировки прошит
+# на заводе, поэтому программно защиту не снять: нужны 12 В на RP#.
+SR_PROTECT = 0x02
 # Команды CUI Intel 28F008SA (таблица 9 документа)
 INTEL_CUI_RESET = 0xFF
 INTEL_CUI_READ_ID = 0x90
@@ -2528,7 +2584,10 @@ INTEL_CUI_SUSPEND = 0xB0
 # StrataFlash буферная запись (28F016S5, M28F016S5):
 # 25h — Write-to-Buffer Setup, D0h — Buffer Write Confirm.
 # Буфер 32 слова (64 байта на чип в 16-битном режиме, 32 байта в 8-битном).
-INTEL_BUFFER_SETUP = 0x25
+# Intel CUI: Write to Buffer = E8h, затем СЧЁТЧИК N (число байт/слов минус
+# один) и D0h. Прежнее 25h - команда AMD StrataFlash (JEDEC), в CUI Intel её
+# нет: даташиты Intel 28F/StrataFlash дают именно E8h + N + D0h.
+INTEL_BUFFER_SETUP = 0xE8
 INTEL_BUFFER_CONFIRM = 0xD0
 INTEL_BUFFER_SIZE = 32  # слов на чип = 32 байта на чип
 # AMD/Fujitsu StrataFlash буферная запись (Am29PL/DL/GL, MBM29DL/GL):
@@ -2620,26 +2679,93 @@ GEOMETRY = {
     # программирование ~7 мкс на байт, шина - миллисекунды на отклик окна;
     # весь образ укладывается в несколько минут. Ускорение даёт только
     # Unlock Bypass (20h) - 2 цикла на байт вместо 4.
+    "Am29F200AB": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=256 << 10, volts=5, sectors=[(16384, 1), (8192, 2), (32768, 1), (65536, 3)],
+                     src="AMD Am29F200AB: 2 Мбит, bottom-boot: 1 x 16K + 2 x 8K + 1 x 32K + 3 x 64K"),
+    "Am29F200AT": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=256 << 10, volts=5, sectors=[(65536, 3), (32768, 1), (8192, 2), (16384, 1)],
+                     src="AMD Am29F200AT: 2 Мбит, top-boot: 3 x 64K + 1 x 32K + 2 x 8K + 1 x 16K"),
+    "Am29F400AB": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=512 << 10, volts=5, sectors=[(16384, 1), (8192, 2), (32768, 1), (65536, 7)],
+                     src="AMD Am29F400AB: 4 Мбит, bottom-boot: 1 x 16K + 2 x 8K + 1 x 32K + 7 x 64K"),
+    "Am29F400AT": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=512 << 10, volts=5, sectors=[(65536, 7), (32768, 1), (8192, 2), (16384, 1)],
+                     src="AMD Am29F400AT: 4 Мбит, top-boot: 7 x 64K + 1 x 32K + 2 x 8K + 1 x 16K"),
+    "Am29F800BB": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=1024 << 10, volts=5, sectors=[(16384, 1), (8192, 2), (32768, 1), (65536, 15)],
+                     src="AMD Am29F800BB: 8 Мбит, bottom-boot: 1 x 16K + 2 x 8K + 1 x 32K + 15 x 64K"),
+    "Am29F800BT": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=1024 << 10, volts=5, sectors=[(65536, 15), (32768, 1), (8192, 2), (16384, 1)],
+                     src="AMD Am29F800BT: 8 Мбит, top-boot: 15 x 64K + 1 x 32K + 2 x 8K + 1 x 16K"),
+    "Am29LV400BB": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=512 << 10, volts=3, sectors=[(16384, 1), (8192, 2), (32768, 1), (65536, 7)],
+                     src="AMD Am29LV400BB: 4 Мбит, 3 В, bottom-boot: 1 x 16K + 2 x 8K + 1 x 32K + 7 x 64K"),
+    "Am29LV400BT": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=512 << 10, volts=3, sectors=[(65536, 7), (32768, 1), (8192, 2), (16384, 1)],
+                     src="AMD Am29LV400BT: 4 Мбит, 3 В, top-boot: 7 x 64K + 1 x 32K + 2 x 8K + 1 x 16K"),
+    "Am29LV800BB": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=1024 << 10, volts=3, sectors=[(16384, 1), (8192, 2), (32768, 1), (65536, 15)],
+                     src="AMD Am29LV800BB: 8 Мбит, 3 В, bottom-boot: 1 x 16K + 2 x 8K + 1 x 32K + 15 x 64K"),
+    "Am29LV800BT": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=1024 << 10, volts=3, sectors=[(65536, 15), (32768, 1), (8192, 2), (16384, 1)],
+                     src="AMD Am29LV800BT: 8 Мбит, 3 В, top-boot: 15 x 64K + 1 x 32K + 2 x 8K + 1 x 16K"),
+    "Am29LV160DB": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=2048 << 10, volts=3, sectors=[(16384, 1), (8192, 2), (32768, 1), (65536, 31)],
+                     src="AMD Am29LV160DB: 16 Мбит, 3 В, bottom-boot: 1 x 16K + 2 x 8K + 1 x 32K + 31 x 64K"),
+    "Am29LV160DT": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=2048 << 10, volts=3, sectors=[(65536, 31), (32768, 1), (8192, 2), (16384, 1)],
+                     src="AMD Am29LV160DT: 16 Мбит, 3 В, top-boot: 31 x 64K + 1 x 32K + 2 x 8K + 1 x 16K"),
+    "Am29LV001BB": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=128 << 10, volts=3, sectors=[(8192, 1), (4096, 2), (16384, 7)],
+                     src="AMD Am29LV001BB: 1 Мбит, 3 В, bottom-boot: 1 x 8K + 2 x 4K + 7 x 16K"),
+    "Am29LV001BT": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=128 << 10, volts=3, sectors=[(16384, 7), (4096, 2), (8192, 1)],
+                     src="AMD Am29LV001BT: 1 Мбит, 3 В, top-boot: 7 x 16K + 2 x 4K + 1 x 8K"),
+    "Am29F400": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     ambiguous=True,
+                     size=512 << 10, volts=5,
+                     src="AMD Am29F400: ревизия не указана - укажите "
+                         "Am29F400AB (bottom-boot) или Am29F400AT (top-boot)"),
+    "Am29LV400": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                      wide=False, ambiguous=True,
+                      size=512 << 10, volts=3,
+                      src="AMD Am29LV400: ревизия не указана - укажите "
+                          "Am29LV400BB или Am29LV400BT"),
+    "Am29LV160": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                      wide=False, ambiguous=True,
+                      size=2 << 20, volts=3,
+                      src="AMD Am29LV160: ревизия не указана - укажите "
+                          "Am29LV160DB или Am29LV160DT"),
+    "Am29LV001": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                      wide=False, ambiguous=True,
+                      size=128 << 10, volts=3,
+                      src="AMD Am29LV001: ревизия не указана - укажите "
+                          "Am29LV001BB или Am29LV001BT"),
     "Am29F016": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=2 << 20, volts=5, bypass=True,
-                     src="AMD Am29F016 (B/D): 32 x 64 КиБ, 5 В. Программи-"
-                         "рование побайтно (A0h, 4 цикла); ускорение - "
-                         "Unlock Bypass 20h (2 цикла на байт)"),
+                     size=2 << 20, volts=5, bypass=False,
+                     src="AMD Am29F016: 32 x 64 КиБ, 5 В, побайтно A0h. Unlock "
+                         "Bypass (20h) появился только в ревизии D (21444E5: "
+                         "«The device now has the Unlock Bypass Program "
+                         "feature»), поэтому по умолчанию не шлём"),
     "Am29F032": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=4 << 20, volts=5, bypass=True,
-                     src="AMD Am29F032: 64 x 64 КиБ, 5 В. Программи-"
-                         "рование побайтно (A0h, 4 цикла); ускорение - "
-                         "Unlock Bypass 20h (2 цикла на байт)"),
+                     size=4 << 20, volts=5, bypass=True, unverified=True,
+                     src="AMD Am29F032: в селекторе AMD 32-Мбит 5-вольтовая часть "
+                         "называется Am29F032B, имени без B там нет; параметры "
+                         "(64 x 64 КиБ, 5 В) взяты как у Am29F032B - не сверены"),
     "Am29F080": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=1 << 20, volts=5, bypass=True,
-                     src="AMD Am29F080: 128 x 64 КиБ, 5 В. Unlock Bypass 20h"),
+                     size=1 << 20, volts=5, bypass=False,
+                     src="AMD Am29F080: 16 x 64 КиБ, 5 В, побайтно A0h; Unlock "
+                         "Bypass 20h есть не у всех ревизий - по умолчанию не шлём"),
     "Am29F040": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=512 << 10, volts=5, bypass=True,
-                     src="AMD Am29F040: 64 x 64 КиБ, 5 В. Unlock Bypass 20h"),
+                     size=512 << 10, volts=5, bypass=False,
+                     src="AMD Am29F040: 8 x 64 КиБ, 5 В, побайтно A0h; Unlock "
+                         "Bypass 20h есть не у всех ревизий - по умолчанию не шлём"),
     "Am29LV016": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                       size=2 << 20, volts=3, src="AMD Am29LV016: 3 В, 32 x 64 КиБ"),
-    "Am29LV800": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                      size=1 << 20, volts=3, src="AMD Am29LV800: 3 В"),
+    "Am29LV800": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
+                      size=1 << 20, volts=3,
+                      src="AMD Am29LV800: ревизия не указана - укажите "
+                          "Am29LV800BB или Am29LV800BT"),
     "MBM29F016": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                       size=2 << 20, volts=5, bypass=True,
                       src="Fujitsu MBM29F016A: 5 В. Unlock Bypass 20h"),
@@ -2654,33 +2780,99 @@ GEOMETRY = {
     # 28F016SA — thirty-two 64-KB blocks (2 MByte). Сектор здесь — у одного чипа;
     # в адресах карты с двумя чипами логический блок удваивается.
     # Для записи/стирания нужен Vpp 12 В (VPPH 11.4...12.6 В).
-    "28F008SA": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=True,
-                     size=1 << 20, volts=12, protocol="intel",
-                     src="Intel 28F008SA: CUI, 16 блоков по 64 КиБ, Vpp 12 В"),
-    "28F016SA": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=True,
-                     size=2 << 20, volts=12, protocol="intel",
-                     src="Intel 28F016SA: CUI, 32 блока по 64 КиБ, Vpp 12 В"),
-    "28F016S5": dict(sector=128 << 10, page=1, cmd=(0, 0), wide=True,
-                     size=2 << 20, volts=12, protocol="intel",
-                     src="Intel 28F016S5: CUI, Vpp 12 В"),
-    "28F320": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=True,
-                   size=4 << 20, volts=3, protocol="intel",
-                   src="Intel 28F320: CUI, 3 В"),
-    "M28F102": dict(sector=16 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                    size=256 << 10, volts=12, src="ST M28F102: сектор 16 КиБ"),
+    # --- Fujitsu MBM29F002/004 и ST M29F002/M29F400 (boot-блоки) ----------
+    # Fujitsu DS05-20868-3E (MBM29F002TC/BC): «One 16K byte, two 8K bytes, one
+    # 32K byte, and three 64K bytes», «T = Top sector, B = Bottom sector».
+    # 4-Мбит ревизии - тот же ряд блоков, что у AMD Am29F004B (даташит: «One
+    # 16 Kbyte, two 8 Kbyte, one 32 Kbyte, and seven 64 Kbyte sectors»).
+    "MBM29F002TC": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                        wide=False, size=256 << 10, volts=5, bypass=False,
+                        sectors=[(65536, 3), (32768, 1), (8192, 2), (16384, 1)],
+                        src="Fujitsu MBM29F002TC: 2 Мбит, top-boot: 3 x 64K + "
+                            "32K + 2 x 8K + 16K"),
+    "MBM29F002BC": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                        wide=False, size=256 << 10, volts=5, bypass=False,
+                        sectors=[(16384, 1), (8192, 2), (32768, 1), (65536, 3)],
+                        src="Fujitsu MBM29F002BC: 2 Мбит, bottom-boot: 16K + "
+                            "2 x 8K + 32K + 3 x 64K"),
+    "MBM29F004TC": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                        wide=False, size=512 << 10, volts=5, bypass=False,
+                        sectors=[(65536, 7), (32768, 1), (8192, 2), (16384, 1)],
+                        src="Fujitsu MBM29F004TC: 4 Мбит, top-boot: 7 x 64K + "
+                            "32K + 2 x 8K + 16K"),
+    "MBM29F004BC": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                        wide=False, size=512 << 10, volts=5, bypass=False,
+                        sectors=[(16384, 1), (8192, 2), (32768, 1), (65536, 7)],
+                        src="Fujitsu MBM29F004BC: 4 Мбит, bottom-boot: 16K + "
+                            "2 x 8K + 32K + 7 x 64K"),
+    # ST: «11 memory blocks - 1 Boot Block, 2 Parameter and 8 Main Blocks»
+    # (M29F400B) и «7 blocks - 1 Boot, 2 Parameter, 4 Main» (M29F002B).
+    "M29F002BT": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                      wide=False, size=256 << 10, volts=5, bypass=False,
+                      sectors=[(65536, 3), (32768, 1), (8192, 2), (16384, 1)],
+                      src="ST M29F002BT: 2 Мбит, top-boot: 3 x 64K + 32K + "
+                          "2 x 8K + 16K"),
+    "M29F002BB": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                      wide=False, size=256 << 10, volts=5, bypass=False,
+                      sectors=[(16384, 1), (8192, 2), (32768, 1), (65536, 3)],
+                      src="ST M29F002BB: 2 Мбит, bottom-boot: 16K + 2 x 8K + "
+                          "32K + 3 x 64K"),
+    "M29F400BT": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                      wide=False, size=512 << 10, volts=5, bypass=False,
+                      sectors=[(65536, 7), (32768, 1), (8192, 2), (16384, 1)],
+                      src="ST M29F400BT: 4 Мбит, top-boot, код 00D5h при "
+                          "вендоре 20h"),
+    "M29F400BB": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                      wide=False, size=512 << 10, volts=5, bypass=False,
+                      sectors=[(16384, 1), (8192, 2), (32768, 1), (65536, 7)],
+                      src="ST M29F400BB: 4 Мбит, bottom-boot, код 00D6h при "
+                          "вендоре 20h"),
+    # --- микросхемы из сверенного реестра JEDEC ID (см. AMD_PARTS) ---
+    "Am29F017D": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                      size=2 << 20, volts=5, bypass=True,
+                      src="AMD Am29F017D: 16 Мбит, 32 x 64 КиБ, CFI"),
+    "Am29F032B": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                      size=4 << 20, volts=5, bypass=True,
+                      src="AMD Am29F032B: 32 Мбит, 64 x 64 КиБ, CFI"),
+    "Am29LV040B": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                       wide=False, size=512 << 10, volts=3, bypass=False,
+                       src="AMD Am29LV040B: 4 Мбит, 3 В, 8 x 64 КиБ"),
+    "Am29F080B": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                      size=1 << 20, volts=5, bypass=False,
+                      src="AMD Am29F080B: 8 Мбит, 16 x 64 КиБ, CFI"),
+    "MBM29F040C": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                       wide=False, size=512 << 10, volts=5, bypass=False,
+                       src="Fujitsu MBM29F040C: 4 Мбит, 8 x 64 КиБ"),
     # --- JEDEC-чипы из AMD_PARTS, которых не хватало в таблице геометрии ---
-    "Am29F800": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+    "Am29F800": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
                      size=1 << 20, volts=5, bypass=True,
-                     src="AMD Am29F800: 16 x 64 КиБ, 5 В. Unlock Bypass 20h"),
-    "Am29F200": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=2 << 20, volts=5, bypass=True,
-                     src="AMD Am29F200: 32 x 64 КиБ, 5 В. Unlock Bypass 20h"),
-    "Am29F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=1 << 20, volts=5, bypass=True,
-                     src="AMD Am29F010: 16 x 64 КиБ, 5 В. Unlock Bypass 20h"),
+                     src="AMD Am29F800: ревизия не указана - укажите "
+                         "Am29F800BB (bottom-boot) или Am29F800BT (top-boot)"),
+    "Am29F200": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
+                     size=256 << 10, volts=5, bypass=True,
+                     src="AMD Am29F200: ревизия не указана - раскладка секторов "
+                         "зависит от неё. Укажите --chip Am29F200AB или "
+                         "Am29F200AT"),
+    "Am29F010": dict(sector=16 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=128 << 10, volts=5, bypass=False,
+                     src="AMD Am29F010: 8 x 16 КиБ = 128 КиБ, 5 В (таблица "
+                         "секторов SA0-SA7 в даташите 21116). Unlock Bypass у "
+                         "исходного Am29F010 нет - он появился в поздних "
+                         "ревизиях, поэтому пишем обычной командой A0h"),
+    # Селектор AMD: в ряду 32 Мбит 5 В есть ТОЛЬКО Am29F032B (4M x 8);
+    # «Am29F033» в нём нет, а 32-Мбитная x16 часть у AMD трёхвольтовая -
+    # Am29LV033C. Поэтому не догадка, а отказ с двумя настоящими именами.
     "Am29F033": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=4 << 20, volts=5, bypass=True,
-                     src="AMD Am29F033: 64 x 64 КиБ, 5 В. Unlock Bypass 20h"),
+                     size=4 << 20, volts=5, bypass=True, ambiguous=True,
+                     why="у AMD нет 5-вольтовой 32-Мбитной части Am29F033: "
+                         "5-вольтовая называется Am29F032B (4M x 8), а 32-Мбитная "
+                         "x16 - трёхвольтовая Am29LV033C",
+                     src="AMD FLASH MEMORY PRODUCT SELECTOR GUIDE: 32 Mbit - Am29F032B"),
+    "Am29LV033C": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                       size=4 << 20, volts=3, bypass=False,
+                       src="AMD Am29LV033C: 32 Мбит (4M x 8), 3,0 В, однородные "
+                           "секторы; Unlock Bypass даташитом не подтверждён - "
+                           "работает штатная A0h"),
     # ====================================================================
     # Дополнительные NOR-флеш микросхемы, встречающиеся на PCMCIA-картах
     # (все параметры из даташитов производителей; для чипов без точных
@@ -2692,111 +2884,258 @@ GEOMETRY = {
                        size=2 << 20, volts=5, bypass=True,
                        src="Fujitsu MBM29F016A: 32 x 64 КиБ, 5 В, аналог Am29F016"),
     "MBM29F033": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                      size=4 << 20, volts=5, bypass=True,
-                      src="Fujitsu MBM29F033: 64 x 64 КиБ, 5 В (данные по умолчанию)"),
-    "MBM29F002": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                      size=256 << 10, volts=5, bypass=True,
-                      src="Fujitsu MBM29F002: 4 x 64 КиБ, 5 В (данные по умолчанию)"),
-    "MBM29F004": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                      size=512 << 10, volts=5, bypass=True,
-                      src="Fujitsu MBM29F004: 8 x 64 КиБ, 5 В (данные по умолчанию)"),
+                      size=4 << 20, volts=5, bypass=True, unverified=True,
+                      src="Fujitsu MBM29F033: имени нет ни в flashchips.h, ни в "
+                          "jedec_probe.c; 64 x 64 КиБ и 5 В - данные по умолчанию, "
+                          "даташитом не сверены"),
+    "MBM29F002": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
+                     size=256 << 10, volts=5,
+                     src="Fujitsu MBM29F002: ревизия не указана - укажите "
+                         "MBM29F002TC (top-boot) или MBM29F002BC (bottom-boot)"),
+    "MBM29F004": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
+                     size=512 << 10, volts=5,
+                     src="Fujitsu MBM29F004: ревизия не указана - укажите "
+                         "MBM29F004TC (top-boot) или MBM29F004BC (bottom-boot)"),
     # --- ST Microelectronics ---
-    "M28F102": dict(sector=16 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                    size=256 << 10, volts=12, src="ST M28F102: сектор 16 КиБ, Vpp 12 В"),
-    "M28F002": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                    size=256 << 10, volts=12, src="ST M28F002: 256 KiB, Vpp 12 В (данные по умолчанию)"),
-    "M28F004": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                    size=512 << 10, volts=12, src="ST M28F004: 512 KiB, Vpp 12 В (данные по умолчанию)"),
+    "M28F102": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                    size=128 << 10, volts=12, ambiguous=True,
+                    why="стирание только целиком (bulk/chip erase, 12 В при "
+                        "программировании), команды Sector Erase нет",
+                    src="ST M28F102 (август 1998): 1 Мбит = 64K x 16 = 128 КиБ, "
+                        "5 В питания и 12 В программирования, «Electrical CHIP "
+                        "ERASE in 1s»; поблочного стирания нет"),
     "M28F016": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                    size=2 << 20, volts=12, src="ST M28F016: 2 MiB, Vpp 12 В (данные по умолчанию)"),
-    "M28F016S5": dict(sector=128 << 10, page=1, cmd=(0, 0), wide=True,
-                      size=2 << 20, volts=12, protocol="intel",
-                      src="ST M28F016S5: StrataFlash, сектор 128 КиБ, Vpp 12 В, буферная запись 25h/D0h"),
+                    size=2 << 20, volts=12, unverified=True,
+                     src="ST M28F016: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
+    # Имена, которых НЕТ в даташитах: ST выпускала 2/4-Мбит boot-block как
+    # M29F002BB/BT и M29F400BB/BT, а серия M28F - старые 12-вольтовые
+    # (M28F512/010/020/102). Mitsubishi 4-Мбит boot-block (M5M29F400) тоже не
+    # подтверждается ни одним найденным даташитом. Держим отказ с объяснением,
+    # а не «значения по умолчанию как у Am29F016»: те дали бы неверную
+    # ёмкость и однородную карту.
+    "M28F002": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                    ambiguous=True, size=256 << 10, volts=5,
+                    src="имя M28F002 даташитом не подтверждено: у ST 2 Мбит "
+                        "boot-block называется M29F002BT/BB. Укажите --chip "
+                        "M29F002BT или M29F002BB"),
+    "M28F004": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                    ambiguous=True, size=512 << 10, volts=5,
+                    src="имя M28F004 даташитом не подтверждено: у ST 4 Мбит "
+                        "boot-block называется M29F400BT/BB. Укажите --chip "
+                        "M29F400BT или M29F400BB"),
+    "M5M29F400": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                      ambiguous=True, size=512 << 10, volts=5,
+                      src="имя M5M29F400 даташитом не подтверждено: у "
+                          "Mitsubishi подтверждены только M5M29F010/M5M29F020. "
+                          "Укажите --chip с проверенным именем"),
     # --- Atmel ---
     "AT29C010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=128 << 10, volts=5, bypass=True,
-                     src="Atmel AT29C010: 128 KiB, 5 В (данные по умолчанию)"),
+                     size=128 << 10, volts=5, bypass=True, ambiguous=True,
+                     src="Atmel AT29C010: страничная запись с автостиранием страницы, команды Sector Erase 30h нет - этим набором не стирается; 5-вольтовые JEDEC-микросхемы Atmel - семейство AT49F (AT49F040A)"),
     "AT29C020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=256 << 10, volts=5, bypass=True,
-                     src="Atmel AT29C020: 256 KiB, 5 В (данные по умолчанию)"),
+                     size=256 << 10, volts=5, bypass=True, ambiguous=True,
+                     src="Atmel AT29C020: страничная запись с автостиранием страницы, команды Sector Erase 30h нет - этим набором не стирается; 5-вольтовые JEDEC-микросхемы Atmel - семейство AT49F (AT49F040A)"),
     "AT29C040": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=512 << 10, volts=5, bypass=True,
-                     src="Atmel AT29C040: 512 KiB, 5 В (данные по умолчанию)"),
+                     size=512 << 10, volts=5, bypass=True, ambiguous=True,
+                     src="Atmel AT29C040: страничная запись с автостиранием страницы, команды Sector Erase 30h нет - этим набором не стирается; 5-вольтовые JEDEC-микросхемы Atmel - семейство AT49F (AT49F040A)"),
     "AT29C512": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=64 << 10, volts=5, bypass=True,
-                     src="Atmel AT29C512: 64 KiB, 5 В (данные по умолчанию)"),
+                     size=64 << 10, volts=5, bypass=True, ambiguous=True,
+                     src="Atmel AT29C512: страничная запись с автостиранием страницы, команды Sector Erase 30h нет - этим набором не стирается; 5-вольтовые JEDEC-микросхемы Atmel - семейство AT49F (AT49F040A)"),
     # --- Toshiba ---
-    "TC58FVT160": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=2 << 20, volts=5, bypass=True,
-                       src="Toshiba TC58FVT160: 2 MiB, 5 В (данные по умолчанию)"),
-    "TC58FVT320": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=4 << 20, volts=5, bypass=True,
-                       src="Toshiba TC58FVT320: 4 MiB, 5 В (данные по умолчанию)"),
+    # Даташит Toshiba TC58FVT160/B160A (16-MBIT, 2Mx8/1Mx16): «Block erase
+    # architecture 1 x 16 Kbytes / 2 x 8 Kbytes / 1 x 32 Kbytes / 31 x 64
+    # Kbytes», «TC58FVT160AFT: top boot block», VDD 2.7-3.6 В, BYTE/Word,
+    # коды 98h/00C2h. В байтовом режиме адреса команд - AAAh/555h (в даташите
+    # прямо: «Byte Mode: AAAH or 555H on address pins A10~A-1»), поэтому
+    # cmd=(0xAAA, 0x555), а не привычные 0x555/0x2AA.
+    # Порядок блоков в верхних 64 КиБ - из таблицы регионов ядра Linux
+    # (jedec_probe.c, TC58FVT160: 31 x 64K + 1 x 32K + 2 x 8K + 1 x 16K).
+    "TC58FVT160": dict(sector=64 << 10, page=1, cmd=(0xAAA, 0x555), wide=False,
+                       size=2 << 20, volts=3, bypass=True,
+                       sectors=[(64 << 10, 31), (32 << 10, 1), (8 << 10, 2), (16 << 10, 1)],
+                       src="Toshiba TC58FVT160: top boot, 31x64K + 32K + 2x8K + 16K, "
+                           "3.0 В, команды AAA/555 (даташит + ядро jedec_probe.c)"),
+    # TC58FVT321 (4 MiB): ядро jedec_probe.c - 63 x 64K + 8 x 8K; пресс-релиз
+    # Toshiba про TC58FVT/B321 - «one 64-Kbyte bank, one 448-Kbyte bank and
+    # seven 512-Kbyte banks», блоки boot 8 КБ x8. Имени TC58FVT320 в даташитах
+    # нет - оно осталось в WRONG_NAMES с подсказкой.
+    "TC58FVT321": dict(sector=64 << 10, page=1, cmd=(0xAAA, 0x555), wide=False,
+                       size=4 << 20, volts=3, bypass=True,
+                       sectors=[(64 << 10, 63), (8 << 10, 8)],
+                       src="Toshiba TC58FVT321: 63x64K + 8x8K, 3.0 В, команды AAA/555 "
+                           "(ядро jedec_probe.c + описание Toshiba TC58FVT/B321)"),
     # --- Samsung ---
     "K9F1G08U0A": dict(sector=128 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                        size=128 << 20, volts=3.3, bypass=False,
                        src="Samsung K9F1G08U0A: NAND, не поддерживается (доступ только по паспорту)"),
     # --- Macronix ---
-    "MX29F1610": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+    # Даташит Macronix MX29F1610 (16M-BIT [2Mx8/1Mx16], 5 В +-10%):
+    # «Sector erase architecture - 16 equal sectors of 128k bytes each»,
+    # страничная запись 128 байт/64 слова. Прежние «64 КиБ сектор» были
+    # опасны: стирание «64 КиБ» стёрло бы блок 128 КиБ вместе с соседом.
+    "MX29F1610": dict(sector=128 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                       size=2 << 20, volts=5, bypass=True,
-                      src="Macronix MX29F1610: 2 MiB, 5 В (аналог Am29F016)"),
-    "MX29F3210": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                      size=4 << 20, volts=5, bypass=True,
-                      src="Macronix MX29F3210: 4 MiB, 5 В (данные по умолчанию)"),
+                      src="Macronix MX29F1610: 16 секторов по 128 КиБ, 5 В "
+                          "(даташит: «16 equal sectors of 128k bytes each»); "
+                          "страничная запись 128 байт не используется - пишем по байту"),
+    # 32-Мбит версия того же семейства; даташита под рукой нет, поэтому
+    # раскладка взята по аналогии (32 x 128 КиБ) и строка помечена unverified.
+    "MX29F3210": dict(sector=128 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                      size=4 << 20, volts=5, bypass=True, unverified=True,
+                      src="Macronix MX29F3210: 4 МиБ, 5 В; раскладка 32 x 128 КиБ "
+                          "взята по аналогии с MX29F1610 - даташитом не сверена"),
     # --- SST ---
-    "SST39VF010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=128 << 10, volts=5, bypass=True,
-                       src="SST SST39VF010: 128 KiB, 5 В (данные по умолчанию)"),
-    "SST39VF020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=256 << 10, volts=5, bypass=True,
-                       src="SST SST39VF020: 256 KiB, 5 В (данные по умолчанию)"),
-    "SST39VF040": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=512 << 10, volts=5, bypass=True,
-                       src="SST SST39VF040: 512 KiB, 5 В (данные по умолчанию)"),
-    "SST39VF080": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=1 << 20, volts=5, bypass=True,
-                       src="SST SST39VF080: 1 MiB, 5 В (данные по умолчанию)"),
+    "SST39VF010": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                       size=128 << 10, volts=3, bypass=True,
+                       src="SST SST39VF010: 128 KiB, 32 секторов по 4 КиБ, 2.7-3.6 В (flashrom sst.c: {4 KiB, 32}; SST DS25022A: uniform 4 KByte sectors)"),
+    "SST39VF020": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                       size=256 << 10, volts=3, bypass=True,
+                       src="SST SST39VF020: 256 KiB, 64 секторов по 4 КиБ, 2.7-3.6 В (flashrom sst.c: {4 KiB, 64}; SST DS25022A: uniform 4 KByte sectors)"),
+    "SST39VF040": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                       size=512 << 10, volts=3, bypass=False,
+                       src="SST SST39VF040: 512 KiB, 128 секторов по 4 КиБ, 2.7-3.6 В (flashrom sst.c: {4 KiB, 128}; SST DS25022A: uniform 4 KByte sectors)"),
+    # 5-вольтовый близнец SST39VF040 (SST DS25022A: uniform 4 KByte sectors).
+    "SST39SF040": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                       size=512 << 10, volts=5, bypass=False,
+                       src="SST SST39SF040: 512 KiB, 128 секторов по 4 КиБ, 5 В "
+                           "(SST DS25022A; flashrom sst.c: {4 KiB, 128})"),
+    "SST39VF080": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                       size=1 << 20, volts=3, bypass=True,
+                       src="SST SST39VF080: 1 MiB, 256 секторов по 4 КиБ, 2.7-3.6 В (flashrom sst.c: {4 KiB, 256}; SST DS25022A: uniform 4 KByte sectors)"),
     # --- Intel 28F-серия (CUI-протокол) ---
     # По datasheet: 28F008SA — sixteen 64-Kbyte blocks (1 MByte),
     # 28F016SA — thirty-two 64-KB blocks (2 MByte).
-    "28F008SA": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=True,
+    # Байтовое семейство Smart 5 FlashFile 4/8/16 Мбит (даташит Intel):
+    # «4 Mbit: Eight Blocks - 8 Mbit: Sixteen Blocks - 16 Mbit: Thirty-Two
+    # Blocks», все блоки по 64 КиБ, 5 В, x8. ID: A7h/A6h (flashrom: 28F004S3/
+    # S5/SC, ядро Linux jedec_probe.c: I28F008S5 = A6h).
+    "28F004S5": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=False,
+                     size=512 << 10, volts=5, protocol="intel",
+                     src="Intel 28F004S5 (4 Мбит, x8, 5 В, даташит 290597-005 + spec update 297796-007): 512 КиБ, однородные секторы 64 КиБ, командой байт"),
+    "28F008S5": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=False,
+                     size=1 << 20, volts=5, protocol="intel",
+                     src="Intel 28F008S5 (8 Мбит, x8, 5 В, даташит 290597-005 + spec update 297796-007): 1024 КиБ, однородные секторы 64 КиБ, командой байт"),
+    # Даташит 290429-008 (28F008SA, 8 Мбит, декабрь 1998): 16 блоков по 64 КиБ,
+    # CUI + статусный регистр, RY/BY#, пауза стирания, 12 В на Vpp при
+    # стирании и записи. Микросхема БАЙТОВАЯ (x8, «Byte Write»): команды
+    # пишутся одним байтом, поэтому wide=False. Статус: SR.7 готовность,
+    # SR.6 пауза стирания, SR.5 ошибка стирания, SR.4 ошибка записи,
+    # SR.3 нет Vpp; SR.2-SR.0 reserved, бита WPPS (как у S5) здесь НЕТ.
+    "28F008SA": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=False,
                      size=1 << 20, volts=12, protocol="intel",
-                     src="Intel 28F008SA: CUI, 16 блоков по 64 КиБ, Vpp 12 В"),
+                     src="Intel 28F008SA (даташит 290429-008): CUI, 16 блоков "
+                         "по 64 КиБ, x8 - команда байтом, 12 В на Vpp, "
+                         "статус 70h (SR.7/6/5/4/3), ID 89h/A2h"),
     "28F016SA": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=True,
                      size=2 << 20, volts=12, protocol="intel",
                      src="Intel 28F016SA: CUI, 32 блока по 64 КиБ, Vpp 12 В"),
-    "28F016S5": dict(sector=128 << 10, page=32, cmd=(0, 0), wide=True,
-                     size=2 << 20, volts=12, protocol="intel",
-                     src="Intel 28F016S5: CUI StrataFlash, блок 128 КиБ, Vpp 12 В, буферная запись 25h/D0h (32 байта/чип)"),
+    # Даташит Intel 28F016S5 («Byte-Wide Smart 5 FlashFile Memory»): «64-Kbyte
+    # Symmetrical Erase Block Architecture ... 16 Mbit: Thirty-Two Blocks».
+    # Прежние 128 КиБ давали ложный отказ blank-check и запись через границу
+    # блока: стирался один 64-КиБ блок, а писалось два.
+    # Даташит Intel «BYTE-WIDE SMART 5 FlashFile MEMORY FAMILY 4, 8, AND 16 MBIT»:
+    # «16 Mbit: Thirty-Two Blocks», 5 В (Vpp 5 или 12 В). Микросхема БАЙТОВАЯ -
+    # команда CUI пишется одним байтом, поэтому wide=False. Буфер 25h/D0h не
+    # используем: это команда AMD StrataFlash, в CUI Intel её нет, а писать
+    # неизвестную команду в микросхему с паспортом карты внутри нельзя.
+    # Пишем по байту командой 40h - медленнее, зато точно по даташиту.
+    "28F016S5": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=False,
+                     size=2 << 20, volts=5, protocol="intel",
+                     src="Intel 28F016S5 (16 Мбит, x8, 5 В, даташит 290597-005 + spec update 297796-007): 2048 КиБ, однородные секторы 64 КиБ, командой байт"
+                         "32 x 64 КиБ, 5 В; буфер не используется"),
+    # Ревизии 28F320 раскладываются по-разному: у B3T/B - boot-блоки, у J3/J5
+    # блоки крупнее 64 КиБ. Общее имя «28F320» ничего не говорит о границах
+    # стирания, а ошибка здесь стирает соседний блок (в 2.17.4 её ловит
+    # _erase_sector_guarded, но лучше не доводить).
     "28F320": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=True,
-                   size=4 << 20, volts=3, protocol="intel",
-                   src="Intel 28F320: CUI, 3 В"),
-    "M28F016S5": dict(sector=128 << 10, page=32, cmd=(0, 0), wide=True,
-                      size=2 << 20, volts=12, protocol="intel",
-                      src="ST M28F016S5: StrataFlash, сектор 128 КиБ, Vpp 12 В, буферная запись 25h/D0h (32 байта/чип)"),
+                   size=4 << 20, volts=3, protocol="intel", ambiguous=True,
+                   src="Intel 28F320: укажите ревизию (B3T/B - boot-блоки, "
+                       "J3/J5 - блоки крупнее); общая раскладка не подтверждена"),
+    # Обозначения M28F016S5 у ST не найдено: байтовое семейство FlashFile
+    # выпускала Intel (28F004S5/008S5/016S5), у ST были M28F008/M28F016 (12 В)
+    # и M28F102. Пока даташита нет - отказ, а не «как у Intel».
+    "M28F016S5": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=False,
+                      size=2 << 20, volts=5, protocol="intel", ambiguous=True,
+                      src="ST M28F016S5: такого обозначения в даташитах ST нет; "
+                          "байтовое семейство FlashFile - это Intel 28F016S5 "
+                          "(5 В, 32 x 64 КиБ): укажите --chip 28F016S5"),
     # --- AMD/Fujitsu StrataFlash (Am29PL/DL/GL, MBM29DL/GL) ---
     # Буферная запись 25h/D0h, JEDEC-протокол, DQ7/DQ5 опрос, 5 В или 3 В.
+    # Имён Am29PL… нет ни в flashchips.h flashrom, ни в jedec_probe.c ядра:
+    # похоже на «PL» из Spansion S29PL, но это уже другой ряд микросхем.
+    # Данные ниже - не сверенные, и это написано прямо в src.
     "Am29PL320": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                      size=4 << 20, volts=5, bypass=True, strata=True,
-                      src="AMD Am29PL320: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                      size=4 << 20, volts=3, bypass=True, strata=True, unverified=True,
+                      src="Am29PL320: обозначение даташитом не подтверждено (нет ни в "
+                          "flashchips.h, ни в jedec_probe.c); 4 МиБ, буфер 32 байта - "
+                          "по аналогии с DL/GL, не сверено"),
     "Am29PL640": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                      size=8 << 20, volts=5, bypass=True, strata=True,
-                      src="AMD Am29PL640: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                      size=8 << 20, volts=3, bypass=True, strata=True, unverified=True,
+                      src="Am29PL640: обозначение даташитом не подтверждено; 8 МиБ - "
+                          "по аналогии с DL/GL, не сверено"),
     "Am29PL1280": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                       size=16 << 20, volts=5, bypass=True, strata=True,
-                       src="AMD Am29PL1280: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                       size=16 << 20, volts=3, bypass=True, strata=True, unverified=True,
+                       src="Am29PL1280: обозначение даташитом не подтверждено; 16 МиБ - "
+                           "по аналогии с DL/GL, не сверено"),
+    # AMD Am29DL322D/323D/324D (даташит 21534d, декабрь 2005): «32 Megabit
+    # (4 M x 8-Bit/2 M x 16-Bit) CMOS **3.0 Volt-only**, Simultaneous Operation».
+    # Table 2: Bank 1 = восемь секторов по 8 КиБ + семь по 64 КиБ, Bank 2 = 56 по
+    # 64 КиБ. Table 5 (Bottom Boot): SA0..SA7 по 8 КиБ, дальше 63 по 64 КиБ.
+    # Прежняя строка «5 В и однородные 64 КиБ» была неверна дважды: у чипа есть
+    # 8-КиБ boot-секторы, и стирание «первого сектора 64 КиБ» стёрло бы только
+    # 8 КиБ (blank-check упал бы), а напряжение написано 3 В прямо в заголовке.
     "Am29DL322": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                      size=4 << 20, volts=5, bypass=True, strata=True,
-                      src="AMD Am29DL322: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                      size=4 << 20, volts=3, bypass=True, strata=True, ambiguous=True,
+                      why="AMD Am29DL322 без суффикса: раскладка зависит от T/B "
+                          "(bottom 8x8K+63x64K, top наоборот, плюс сектор SecSi "
+                          "64 КиБ); укажите Am29DL322DB/DT - они в таблице",
+                      src="AMD Am29DL322D (21534d), Table 2/5: 3,0 В, boot 8 КиБ"),
     "Am29DL323": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                      size=4 << 20, volts=5, bypass=True, strata=True,
-                      src="AMD Am29DL323: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                      size=4 << 20, volts=3, bypass=True, strata=True, ambiguous=True,
+                      why="AMD Am29DL323 без суффикса: нужен T/B (раскладка одна и "
+                          "та же с 322D, различаются банки); укажите Am29DL323DB/DT",
+                      src="AMD Am29DL323D (21534d), Table 2: 3,0 В, boot 8 КиБ"),
     "Am29DL642": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                      size=8 << 20, volts=5, bypass=True, strata=True,
-                      src="AMD Am29DL642: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                      size=8 << 20, volts=3, bypass=True, strata=True, ambiguous=True,
+                      why="AMD Am29DL642: 64-Мбит семейство Am29DL640D/G - четыре "
+                          "банка, восемь boot-секторов по 8 КиБ снизу И восемь "
+                          "сверху («Both Top and Bottom Boot»), между ними 126 по "
+                          "64 КиБ; однородных 64 КиБ нет. Укажите ревизию D или G",
+                      src="AMD Am29DL640D (23695C3) / Am29DL640G (25693B): 3,0 В, "
+                          "8 КиБ + 126 x 64 КиБ + 8 КиБ"),
     "Am29DL643": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                      size=8 << 20, volts=5, bypass=True, strata=True,
-                      src="AMD Am29DL643: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                      size=8 << 20, volts=3, bypass=True, strata=True, ambiguous=True,
+                      why="AMD Am29DL643: то же семейство Am29DL640D/G (x16): восемь "
+                          "8-КиБ boot-секторов снизу и восемь сверху, 126 x 64 КиБ; "
+                          "укажите ревизию D или G",
+                      src="AMD Am29DL640D (23695C3) / Am29DL640G (25693B): 3,0 В"),
+    # Конкретные ревизии: карта из Table 5 (bottom) и Table 3 (top) даташита
+    # 21534d. Сумма 8x8K + 63x64K = 4 МиБ, сходится с Table 2.
+    "Am29DL322DB": dict(sector=8 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                        wide=False, volts=3, bypass=True, strata=True,
+                        sectors=[(8 << 10, 8), (64 << 10, 63)],
+                        src="AMD Am29DL322DB (21534d, Table 5): 8x8 КиБ + 63x64 КиБ, 3,0 В"),
+    "Am29DL322DT": dict(sector=64 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                        wide=False, volts=3, bypass=True, strata=True,
+                        sectors=[(64 << 10, 63), (8 << 10, 8)],
+                        src="AMD Am29DL322DT (21534d, Table 3): 63x64 КиБ + 8x8 КиБ, 3,0 В"),
+    "Am29DL323DB": dict(sector=8 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                        wide=False, volts=3, bypass=True, strata=True,
+                        sectors=[(8 << 10, 8), (64 << 10, 63)],
+                        src="AMD Am29DL323DB (21534d, Table 5): раскладка как у 322DB, "
+                            "иное деление на банки"),
+    "Am29DL323DT": dict(sector=64 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                        wide=False, volts=3, bypass=True, strata=True,
+                        sectors=[(64 << 10, 63), (8 << 10, 8)],
+                        src="AMD Am29DL323DT (21534d, Table 3): раскладка как у 322DT"),
+    "Am29DL324DB": dict(sector=8 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                        wide=False, volts=3, bypass=True, strata=True,
+                        sectors=[(8 << 10, 8), (64 << 10, 63)],
+                        src="AMD Am29DL324DB (21534d, Table 5): раскладка как у 322DB"),
+    "Am29DL324DT": dict(sector=64 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                        wide=False, volts=3, bypass=True, strata=True,
+                        sectors=[(64 << 10, 63), (8 << 10, 8)],
+                        src="AMD Am29DL324DT (21534d, Table 3): раскладка как у 322DT"),
     "Am29GL064": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
                       size=8 << 20, volts=3, bypass=True, strata=True,
                       src="AMD Am29GL064: StrataFlash, буфер 32 байта, 25h/D0h, 3 В"),
@@ -2812,26 +3151,71 @@ GEOMETRY = {
     "Am29GL1024": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
                        size=128 << 20, volts=3, bypass=True, strata=True,
                        src="AMD Am29GL1024: StrataFlash, буфер 32 байта, 25h/D0h, 3 В"),
+    # Fujitsu MBM29DL32xTE/BE — «32 M-bit, 3.0 volt-only», копия AMD 21534d;
+    # раскладка та же (8 boot-секторов по 8 КиБ), суффикс BE/TE её и задаёт.
     "MBM29DL322": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                       size=4 << 20, volts=5, bypass=True, strata=True,
-                       src="Fujitsu MBM29DL322: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                       size=4 << 20, volts=3, bypass=True, strata=True, ambiguous=True,
+                       why="Fujitsu MBM29DL322 без суффикса: нужен BE (bottom) или "
+                           "TE (top); укажите MBM29DL322BE/TE",
+                       src="Fujitsu MBM29DL32xTE/BE: 3,0 В, boot 8 КиБ"),
     "MBM29DL642": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                       size=8 << 20, volts=5, bypass=True, strata=True,
-                       src="Fujitsu MBM29DL642: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                       size=8 << 20, volts=3, bypass=True, strata=True, ambiguous=True,
+                       why="Fujitsu MBM29DL642: 64-Мбит двухбанковое семейство, "
+                           "8-КиБ boot-секторы; раскладку ревизии не сверяли",
+                       src="Fujitsu MBM29DL64x: 3,0 В (по аналогии с MBM29DL32x)"),
+    "MBM29DL322BE": dict(sector=8 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                         wide=False, volts=3, bypass=True, strata=True,
+                         sectors=[(8 << 10, 8), (64 << 10, 63)],
+                         src="Fujitsu MBM29DL322BE (bottom boot): 8x8 КиБ + 63x64 КиБ, 3,0 В"),
+    "MBM29DL322TE": dict(sector=64 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                         wide=False, volts=3, bypass=True, strata=True,
+                         sectors=[(64 << 10, 63), (8 << 10, 8)],
+                         src="Fujitsu MBM29DL322TE (top boot): 63x64 КиБ + 8x8 КиБ, 3,0 В"),
     "MBM29GL064": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
                        size=8 << 20, volts=3, bypass=True, strata=True,
                        src="Fujitsu MBM29GL064: StrataFlash, буфер 32 байта, 25h/D0h, 3 В"),
     "MBM29GL128": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
                        size=16 << 20, volts=3, bypass=True, strata=True,
                        src="Fujitsu MBM29GL128: StrataFlash, буфер 32 байта, 25h/D0h, 3 В"),
+    # Первое поколение Intel (12 В): стирание только ВСЕГО чипа
+    # («Bulk Erase» в каталоге Intel; у 28F020 в описании - «adds
+    # electrical chip-erasure»). Команды Sector Erase у этих
+    # микросхем нет, поэтому цикл «стереть сектор - записать» к ним
+    # неприменим.
     "28F256": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                   size=32 << 10, volts=12, src="Intel 28F256: 32 KiB, Vpp 12 В (устаревший)"),
+                   size=32 << 10, volts=12, ambiguous=True,
+                   why="стирание только целиком (bulk erase, 12 В), команды Sector Erase нет",
+                   src="Intel 28F256: 32 KiB, первое поколение, 12 В; в каталоге Intel помечена как Bulk Erase - поблочно не стирается"),
     "28F512": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                   size=64 << 10, volts=12, src="Intel 28F512: 64 KiB, Vpp 12 В (устаревший)"),
-    "28F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                   size=128 << 10, volts=12, src="Intel 28F010: 128 KiB, Vpp 12 В (устаревший)"),
-    "28F020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                   size=256 << 10, volts=12, src="Intel 28F020: 256 KiB, Vpp 12 В (устаревший)"),
+                   size=64 << 10, volts=12, ambiguous=True,
+                   why="стирание только целиком (bulk erase, 12 В), команды Sector Erase нет",
+                   src="Intel 28F512: 64 KiB, первое поколение, 12 В; в каталоге Intel помечена как Bulk Erase - поблочно не стирается"),
+    # Сверено по даташиту Intel 290207-010 (28F010, ноябрь 1995). Важное:
+    # это НЕ JEDEC-микросхема - никаких 555h/2AAh: команды пишутся в регистр
+    # команд одним байтом (Read 00h, ID 90h, Erase 20h+20h, Program 40h+PA/PD,
+    # Erase Verify A0h, Program Verify C0h, Reset FFh+FFh). Стирание ТОЛЬКО
+    # всего чипа (20h/20h), блочного нет; стирание и запись возможны только
+    # при 12 В на Vpp (при Vpp < 6.5 В чип read-only); статусного регистра
+    # (70h) нет - готовность проверяется командами A0h/C0h, а не опросом бит.
+    # Поэтому строка помечена ro: набор такие микросхемы только читает, иначе
+    # он послал бы AMD-команды и «успешно» дождался DQ7 у нетронутого массива.
+    "28F010": dict(sector=128 << 10, page=1, cmd=(0, 0), wide=False,
+                   size=128 << 10, volts=12, ambiguous=True, protocol="intel",
+                   ro=True,
+                   why="стирание только ВСЕГО чипа (20h+20h, нужны 12 В на Vpp) "
+                       "и нет статусного регистра 70h - набор её не пишет",
+                   src="Intel 28F010 (128K x 8, даташит 290207-010): команды "
+                       "00h/90h/20h/40h/A0h/C0h/FFh, блочного стирания нет, "
+                       "12 В +-5% на Vpp, чип-стирание 1 с тип., байт 10 мкс тип., "
+                       "ID 89h/B4h"),
+    "28F020": dict(sector=256 << 10, page=1, cmd=(0, 0), wide=False,
+                   size=256 << 10, volts=12, ambiguous=True, protocol="intel",
+                   ro=True,
+                   why="стирание только ВСЕГО чипа (20h+20h, нужны 12 В на Vpp) "
+                       "и нет статусного регистра 70h - набор её не пишет",
+                   src="Intel 28F020: 256 KiB, то же первое поколение (12 В, "
+                       "bulk erase); отдельного даташита в наборе нет - "
+                       "поведение как у 28F010 (290207-010)"),
     # ====================================================================
     # Производители Hitachi, Mitsubishi, NEC, Sharp и др.
     # Параметры указаны по даташитам, где известны; иначе — безопасные
@@ -2842,36 +3226,43 @@ GEOMETRY = {
     # --- Hitachi ---
     "HN28F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      size=128 << 10, volts=5, bypass=True,
-                     src="Hitachi HN28F010: 128 KiB, 5 В, JEDEC (по умолчанию)"),
+                     unverified=True,
+                     src="Hitachi HN28F010: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     "HN28F020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      size=256 << 10, volts=5, bypass=True,
-                     src="Hitachi HN28F020: 256 KiB, 5 В, JEDEC (по умолчанию)"),
+                     unverified=True,
+                     src="Hitachi HN28F020: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     "HN28F100": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      size=1 << 20, volts=5, bypass=True,
-                     src="Hitachi HN28F100: 1 MiB, 5 В, JEDEC (по умолчанию)"),
+                     unverified=True,
+                     src="Hitachi HN28F100: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     # --- Mitsubishi ---
     "M5M29F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                       size=128 << 10, volts=5, bypass=True,
-                      src="Mitsubishi M5M29F010: 128 KiB, 5 В, аналог Am29F010"),
+                      unverified=True,
+                     src="Mitsubishi M5M29F010: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     "M5M29F020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                       size=256 << 10, volts=5, bypass=True,
-                      src="Mitsubishi M5M29F020: 256 KiB, 5 В, аналог Am29F020"),
-    "M5M29F400": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                      size=512 << 10, volts=5, bypass=True,
-                      src="Mitsubishi M5M29F400: 512 KiB, 5 В (по умолчанию)"),
+                      unverified=True,
+                     src="Mitsubishi M5M29F020: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     # --- NEC ---
     "D28F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                    size=128 << 10, volts=12, src="NEC D28F010: 128 KiB, Vpp 12 В (по умолчанию)"),
+                    size=128 << 10, volts=12, unverified=True,
+                     src="NEC D28F010: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     "D28F020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                    size=256 << 10, volts=12, src="NEC D28F020: 256 KiB, Vpp 12 В (по умолчанию)"),
+                    size=256 << 10, volts=12, unverified=True,
+                     src="NEC D28F020: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     # --- Sharp ---
     "LH28F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=128 << 10, volts=12, src="Sharp LH28F010: 128 KiB, Vpp 12 В (по умолчанию)"),
+                     size=128 << 10, volts=12, unverified=True,
+                     src="Sharp LH28F010: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     "LH28F020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=256 << 10, volts=12, src="Sharp LH28F020: 256 KiB, Vpp 12 В (по умолчанию)"),
+                     size=256 << 10, volts=12, unverified=True,
+                     src="Sharp LH28F020: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     # --- СGS-Thomson / ST (дополнительно к M28F*) ---
     "M28F008": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                    size=1 << 20, volts=12, src="ST M28F008: 1 MiB, Vpp 12 В (по умолчанию)"),
+                    size=1 << 20, volts=12, unverified=True,
+                     src="ST M28F008: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
     # --- Samsung (дополнительно к K9*) ---
     "K9F1208U0A": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                        size=128 << 20, volts=3.3, bypass=False,
@@ -2890,6 +3281,129 @@ AMD_READ_ID = 0x90
 AMD_READ_CFI = 0x98
 
 
+def sector_map(geo):
+    """Карта секторов ОДНОГО чипа: [(размер, число), ...] от младших адресов.
+
+    У большинства микросхем она однородная и собирается из sector/size. У
+    boot-микросхем задана явно в GEOMETRY (16K + 2x8K + 32K + N x 64K, а у
+    top-boot - то же в обратном порядке) или приходит из CFI, где erase-
+    регионы описаны именно так.
+    """
+    pairs = geo.get("sectors") or []
+    if pairs:
+        return [(int(size), int(count)) for size, count in pairs]
+    sector = int(geo.get("sector") or 0)
+    size = int(geo.get("size") or 0)
+    if sector > 0 and size > 0 and size % sector == 0:
+        return [(sector, size // sector)]
+    return []
+
+
+def check_sector_map(geo, strict=False):
+    """Карта секторов должна сходиться с ёмкостью чипа - иначе работать нельзя.
+
+    Границы сектора считаются по карте; если её нет, «округление по 64 КиБ» на
+    boot-чипе стёрло бы 16K+8K+8K+32K одним махом, вместе с паспортом карты.
+
+    strict=False - мягкая проверка (во время опроса карты, когда ёмкость ещё
+    не известна): проверяем только то, что можно проверить. strict=True -
+    перед стиранием и записью: без карты секторов не работаем.
+    """
+    pairs = sector_map(geo)
+    size = int(geo.get("size") or 0)
+    name = geo.get("name") or "микросхема"
+    if geo.get("sectors"):
+        total = sum(sz * cnt for sz, cnt in pairs)
+        if size and total != size:
+            raise DirectError(
+                "микросхема " + str(name) + ": карта секторов даёт " +
+                str(total) + " байт, а ёмкость " + str(size) + " - данные "
+                "противоречат друг другу, работать нельзя.")
+        return geo
+    if geo.get("ambiguous") and geo.get("why"):
+        # Отказ не из-за ревизии, а из-за того, что микросхема вообще не умеет
+        # то, на чём построен наш цикл (например, стирание только целиком).
+        hint = geo.get("src") or geo.get("notes") or ""
+        raise DirectError("микросхема " + str(name) + ": " + str(geo["why"])
+                          + ((" Подробнее: " + hint.rstrip(".") + ".") if hint else ""))
+    if geo.get("ambiguous"):
+        hint = geo.get("src") or geo.get("notes") or ""
+        raise DirectError(
+            "микросхема " + str(name) + ": ревизия не указана, а у boot-чипов "
+            "от неё зависит раскладка секторов (16K + 2x8K + 32K + 64K...). "
+            "Укажите точное имя ключом --chip (например Am29F800BB для "
+            "bottom-boot или Am29F800BT для top-boot): иначе первое же "
+            "стирание заденет соседние данные."
+            + ((" Что известно про это имя: " + hint.rstrip(".") + ".")
+               if hint else ""))
+    if strict and (not pairs or not size):
+        raise DirectError(
+            "микросхема " + str(name) + ": неизвестна карта секторов (нет ни "
+            "размера сектора, ни списка секторов). Укажите модель ключом "
+            "--chip или размер сектора ключом --sector.")
+    return geo
+
+
+def sector_at(geo, chip_off):
+    """Границы сектора, содержащего адрес ВНУТРИ чипа: (начало, размер)."""
+    pairs = sector_map(geo)
+    off = 0
+    for size, count in pairs:
+        if chip_off < off + size * count:
+            return off + ((chip_off - off) // size) * size, size
+        off += size * count
+    if pairs:
+        size = pairs[-1][0]
+        return off - size, size
+    return chip_off, 0
+
+
+# Обозначения, которых в даташитах нет (или которые принадлежат другой
+# микросхеме). Раньше они молча получали «умолчания как у Am29F016»: 64 КиБ
+# сектор, 2 МиБ - то есть на boot-чипе первое же стирание задело бы 16K+8K+8K+
+# 32K. Теперь это отказ с подсказкой, какое имя указать.
+WRONG_NAMES = {
+    "AT29F040": "у Atmel нет AT29F040: 5-вольтовый флеш с командами JEDEC - это "
+                "AT49F040A (512 КиБ, 16K+2x8K+32K+7x64K); AT29C040A - страничная "
+                "запись без команды стирания 30h",
+    "AT29F040B": "у Atmel нет AT29F040B: см. AT49F040A (512 КиБ, boot-блоки) или "
+                 "AT29C040A (страничная запись, без 30h)",
+    "AT29F016": "у Atmel нет AT29F016: AT29-серия - страничная запись (512/010/"
+                "020/040), AT49F - до 1 МиБ; 16-Мбит часть у Atmel - x16 "
+                "(AT49BV16xx), для байтовой карты не подходит",
+    "AT29F080": "у Atmel нет AT29F080: 1 МиБ байтовая - AT49F080 (стирание только "
+                "чипом, команды Sector Erase нет); AT29C-серия - страничная запись",
+    "SST39VF016": "у SST нет 39VF016: 16-Мбит часть называется SST39VF160, и она "
+                  "x16 (3 В), а не байтовая; байтовые 5-вольтовые - до SST39SF040",
+    "SST39SF016": "у SST нет 39SF016: 5-вольтовая байтовая серия кончается на "
+                  "SST39SF040 (512 КиБ)",
+    "28F002SA": "у Intel нет 28F002SA: 2-Мбит boot-block - 28F002BV/BX (x8/x16), "
+                "байтовое семейство Smart 5 - 28F004S5/28F008S5/28F016S5",
+    "28F004SA": "у Intel нет 28F004SA: 4-Мбит байтовая - 28F004S5 (8 блоков по "
+                "64 КиБ), она же 28F004S3/SC",
+    "TC58FVT320": "у Toshiba нет TC58FVT320: 32-Мбит часть называется TC58FVT321 "
+                  "(4 МиБ, 63x64 КиБ + 8x8 КиБ, 3 В, команды AAAh/555h)",
+    "M28F016S5": "у ST нет M28F016S5: байтовое семейство Smart 5 выпускала Intel "
+                 "(28F016S5, 5 В, 32 x 64 КиБ)",
+}
+
+
+def name_known(name):
+    """Есть ли имя в таблице (точно или как самое длинное совпадение)."""
+    key = str(name or "").strip()
+    if not key:
+        return False
+    if key in GEOMETRY:
+        return True
+    up = key.upper()
+    return any(len(n) >= 5 and n.upper() in up for n in GEOMETRY)
+
+
+def wrong_name_hint(name):
+    """Подсказка для обозначения, которого нет в даташитах (или '')."""
+    return WRONG_NAMES.get(str(name or "").strip().upper(), "")
+
+
 def geometry_for(name, size=None, volts=None):
     """Параметры микросхемы по имени: сектор, адреса/ширина команды, вольты.
 
@@ -2902,25 +3416,41 @@ def geometry_for(name, size=None, volts=None):
                 protocol="jedec",
                 size=size or 0, volts=volts or 0,
                 src="по умолчанию (как Am29F016)")
+    def done(g):
+        """Домешать имя и проверить карту секторов."""
+        g.setdefault("name", str(g.get("name") or ""))
+        if g.get("sectors"):
+            check_sector_map(g)          # сумма карты должна сходиться
+        return g
+
     if not name:
         return base
+    hint = wrong_name_hint(name)
+    if hint:
+        raise DirectError("микросхема " + str(name) + ": " + hint + ".")
     key = str(name).strip()
     if key in GEOMETRY:
         g = dict(base)
         g.update(GEOMETRY[key])
+        g["name"] = key
         if size:
             g["size"] = size
         if volts:
             g["volts"] = volts
-        return g
+        return done(g)
     up = key.upper()
-    for name2, g2 in GEOMETRY.items():
-        if name2.upper() in up:
-            out = dict(base)
-            out.update(g2)
-            if size:
-                out["size"] = size
-            return out
+    # Самое длинное совпадение: «Am29LV800B» не должно подходить под «Am29LV800»
+    # по первому найденному ключу словаря - у ревизий различаются сектора.
+    hits = [(len(name2), name2) for name2 in GEOMETRY
+            if len(name2) >= 5 and name2.upper() in up]
+    if hits:
+        best = max(hits)[1]
+        out = dict(base)
+        out.update(GEOMETRY[best])
+        out["name"] = best
+        if size:
+            out["size"] = size
+        return done(out)
     return base
 
 
@@ -2933,12 +3463,20 @@ def chip_name_from_info(info):
             vid, did = int(j[0:2], 16), int(j[2:4], 16)
         except ValueError:
             vid = did = None
-        if vid == 0x01 and did in AMD_PARTS:
-            return AMD_PARTS[did][0]
-    if vid == 0x89 and did == 0xA2:
-        return "28F008SA"
-    if vid == 0x89 and did == 0xA1:
-        return "28F016SA"
+        part = vendor_part(vid, did)
+        if part:
+            return part[0]
+    # Коды Intel: 0xA2 = 28F008SA (flashrom и ядро), 0xA0 = 28F016SV
+    # («28F016SA/SV» по flashrom; ядро читает тот же A0h как 28F016S5 - у них
+    # одна раскладка), 0xA6 = 28F008S5, 0xA7 = 28F004S5. Кода A1h в этих
+    # таблицах нет, поэтому прежнее «A1h = 28F016SA» убрано: угадывать нельзя.
+    # 0xB4 - 28F010 по даташиту 290207-010 (Intelligent Identifier: mfr 89h,
+    # device B4h, читается и командой 90h, и поднятием A9 - второй способ в
+    # слоте недоступен). Кода 28F020 в приложенном документе нет.
+    intel_ids = {0xA0: "28F016SV", 0xA2: "28F008SA", 0xA6: "28F008S5",
+                 0xA7: "28F004S5", 0xB4: "28F010"}
+    if vid == 0x89 and did in intel_ids:
+        return intel_ids[did]
     prod = " ".join((info or {}).get("product") or []).upper()
     for name in list(GEOMETRY) + ["28F008SA", "28F016SA"]:
         if name.upper() in prod:
@@ -2958,6 +3496,14 @@ def identify_chip(flash, info=None, force=None, progress=None):
     if progress:
         progress("определяю микросхему: паспорт")
     name = (force or chip_name_from_info(info or {}) or "").strip()
+    if force and not name_known(force):
+        hint = wrong_name_hint(force)
+        raise DirectError(
+            "микросхема " + str(force) + ": в таблице такого имени нет"
+            + (" — " + hint if hint else "")
+            + ". Опечатка в --chip опаснее отказа: умолчания (64 КиБ, 2 МиБ) на "
+              "boot-чипе задели бы 16K+8K+8K+32K. Список имён: --chip ? или "
+              "--list-chips.")
     how = "паспорт карты" if name else "имя не определено"
     size = 0
     devs = (info or {}).get("devices") or []
@@ -2975,7 +3521,16 @@ def identify_chip(flash, info=None, force=None, progress=None):
     res = dict(name=res_name, sector=geo["sector"], cmd=geo["cmd"],
                wide=geo["wide"], size=geo["size"], chips=chips or 0,
                volts=geo["volts"], how=how, autodetect="",
-               protocol=geo.get("protocol", "jedec"))
+               protocol=geo.get("protocol", "jedec"),
+               # карта секторов ОДНОГО чипа (в байтах), как её видит таблица
+               sectors=list(geo.get("sectors") or []),
+               ambiguous=bool(geo.get("ambiguous")),
+               # строка есть в таблице, но её параметры не сверены с даташитом
+               unverified=bool(geo.get("unverified")),
+               # микросхема в наборе только читается (нет команды стирания,
+               # нужны 12 В и т.п.) - причина в ro_why
+               ro=bool(geo.get("ro")), ro_why=str(geo.get("why") or ""),
+               src=str(geo.get("src") or ""))
     if progress:
         progress("определяю микросхему: опрос самой микросхемы")
     auto = autodetect_chip(flash)
@@ -2987,12 +3542,24 @@ def identify_chip(flash, info=None, force=None, progress=None):
             g2 = geometry_for(auto["name"], size=res["size"] or None)
             res.update(sector=g2["sector"], cmd=g2["cmd"], wide=g2["wide"],
                        volts=g2["volts"] or res["volts"],
-                       protocol=g2.get("protocol", "jedec"))
+                       protocol=g2.get("protocol", "jedec"),
+                       sectors=list(g2.get("sectors") or res["sectors"]),
+                       ambiguous=bool(g2.get("ambiguous")),
+                       ro=bool(g2.get("ro")),
+                       ro_why=str(g2.get("why") or res.get("ro_why") or ""))
         elif auto.get("manuf") is not None and not auto.get("id_documented"):
             # Производитель отвечает, но код устройства недокументирован:
             # не подменяем имя Am29F016 — пишем честно, что определено по CFI.
             res["how"] = ("автоопределение (производитель отвечает, "
                           "код устройства недокументирован)")
+        if auto.get("sectors"):
+            # CFI описывает erase-регионы именно так: (блоков, размер блока).
+            # Это карта ЧИПА и самый достоверный источник: снимает вопрос о
+            # ревизии (bottom-boot / top-boot) без всяких догадок.
+            res["sectors"] = [(int(sz), int(cnt))
+                              for sz, cnt in auto["sectors"]]
+            res["ambiguous"] = False
+            res["how"] += " + карта секторов из CFI"
         if auto.get("sector"):
             # сектор из CFI - это сектор ЧИПА; ниже он умножится на число чипов
             res["sector"] = auto["sector"]
@@ -3037,6 +3604,10 @@ def identify_chip(flash, info=None, force=None, progress=None):
     # «одного сектора» задело бы половину соседнего.
     res["sector_chip"] = res["sector"]
     res["sector"] = res["sector"] * max(int(res["chips"]), 1)
+    # Карта секторов проверяется здесь, а не в geometry_for: если ревизия не
+    # указана (Am29F800 - это и BB, и BT), CFI выше мог дать точные регионы,
+    # и тогда отказываться незачем.
+    check_sector_map(res)
     return res
 
 
@@ -3087,13 +3658,10 @@ def _autodetect_amd(flash):
     out["manuf"] = man
     out["device"] = dev
     out["id_documented"] = False
-    if man == 0x01 and dev in AMD_PARTS:
-        out["name"] = AMD_PARTS[dev][0]
-        out["id_documented"] = True
-    elif man == 0x04 and dev == 0xAD:
-        # Fujitsu MBM29F016A — JEDEC-совместим с Am29F016,
-        # вендор ID Fujitsu (04h), код устройства ADh.
-        out["name"] = "MBM29F016A"
+    part = vendor_part(man, dev)
+    if part:
+        # Fujitsu (04h/ADh) — MBM29F016A, JEDEC-совместимый с Am29F016
+        out["name"] = part[0]
         out["id_documented"] = True
     elif man == 0x89:
         out["name"] = {0xA1: "28F016SA", 0xA2: "28F008SA",
@@ -3117,7 +3685,8 @@ def _autodetect_intel(flash):
     out = {}
     twin = NorFlash(flash.bus, chips=flash.chips, sector=flash.sector,
                     cmd=(0, 0), wide=True, name=flash.name or "",
-                    protocol="intel")
+                    protocol="intel",
+                    sector_map=getattr(flash, "sector_map", None))
     man, dev = twin.read_id()
     if man in (0x89, 0x01, 0x1F, 0x20) and dev not in (0xFF, 0x00, None):
         out["manuf"] = man
@@ -3126,140 +3695,262 @@ def _autodetect_intel(flash):
                  0xA4: "28F320"}
         if man == 0x89:
             out["name"] = names.get(dev, "")
-        elif man == 0x01 and dev in AMD_PARTS:
-            out["name"] = AMD_PARTS[dev][0]
+        else:
+            part = vendor_part(man, dev)
+            if part:
+                out["name"] = part[0]
     return out
 
 
 def _autodetect_cfi(flash):
-    """CFI (98h): размер сектора, ёмкость, возможность буферной записи,
-    производитель, устройство, напряжения и тайм-ауты.
+    """Таблица CFI (команда 98h): ёмкость, блоки, напряжения, тайм-ауты.
 
-    Читает поля таблицы CFI по даташиту JEDEC/JEIDA (JESD68):
-      * 0x10-0x12 — сигнатура "QRY";
-      * 0x13-0x14 — версия CFI;
-      * 0x15      — команда вызова CFI;
-      * 0x18-0x1A — информация о производителе чипа (CFI);
-      * 0x1B-0x1C — код устройства (CFI);
-      * 0x28-0x29 — размер однократной записи (байт);
-      * 0x2A      — максимальный размер multibyte-write (2^n байт, 0 = нет);
-      * 0x2C-0x2D — размер сектора (единица 256 байт);
-      * 0x2E-0x2F — число секторов в чипе;
-      * 0x30-0x31 — Vcc min при записи;
-      * 0x32-0x33 — Vcc max при записи;
-      * 0x34-0x35 — Vpp min при записи;
-      * 0x36-0x37 — Vpp max при записи;
-      * 0x36      — тайм-аут программирования байта (2^n мкс);
-      * 0x38      — тайм-аут стирания сектора (2^n мкс);
-      * 0x39      — тайм-аут буферной записи (2^n мкс);
-      * 0x3A      — тайм-аут стирания кристалла (2^n мкс);
-      * 0x3B      — тайм-аут переключения режима (2^n мкс);
-      * 0x3D-0x3E — максимальное число циклов стирания/записи.
+    Раскладка полей - CFI Publication 100, таблица 5; сверено по ядру Linux
+    (include/linux/mtd/cfi.h - struct cfi_ident; drivers/mtd/chips/cfi_probe.c -
+    таблица читается с адреса 0x10):
 
-    Возвращает dict с секторами, ёмкостью и флагами возможностей микросхемы.
-    CFI есть только у более поздних ревизий (Am29F016D и новее); у Am29F016
-    и Am29F016B его нет — отсутствие ответа не ошибка.
+        0x10-0x12  "QRY" - признак CFI;
+        0x13-0x14  основной набор команд (01h = Intel, 02h = AMD/Fujitsu);
+        0x15-0x16  адрес расширенной таблицы (там же версия CFI);
+        0x17-0x1A  альтернативный набор команд и его адрес;
+        0x1B..0x1E Vcc min/max и Vpp min/max при записи, единица 100 мВ;
+        0x1F..0x22  типовые тайм-ауты (2^n мкс): слово, буфер, сектор, чип;
+        0x23..0x26  максимальные тайм-ауты тех же операций;
+        0x27       ёмкость ОДНОГО чипа: 2^n байт;
+        0x28-0x29  разрядность шины (1 = x8, 2 = x16, 3 = x8/x16);
+        0x2A-0x2B  буферная запись: 2^n байт (0 - буфера нет);
+        0x2C       число erase-регионов;
+        0x2D..     регионы по 4 байта: младшие 16 бит = блоков - 1,
+                   старшие 16 бит = размер блока в единицах 256 байт.
+
+    ЧТО БЫЛО НЕ ТАК: прежняя версия читала поля со сдвигом на байт - номер
+    региона (0x2C) принимала за младший байт размера сектора, а 0x2E-0x2F за
+    число секторов. На Am29F016D (0x2C=01, регион = 1F 00 00 01) это давало
+    «сектор 2 031 872 байта, секторов 0», а на других чипах - мусорную
+    ёмкость, которая перекрывала настоящую (см. ниже res["size"]). Проверять
+    такие числа надо по таблице выше.
+
+    CFI есть не у всех: у Am29F016/B его нет, у Am29F016D и новее - есть.
+    Отсутствие ответа не ошибка.
     """
     out = {}
-    flash.unlock()
-    flash._send(flash.cmd1, INTEL_READ_CFI if flash.wide else AMD_READ_CFI)
-    def _read_byte_at(addr):
+    # CFI Query - ОДИН цикл по адресу 55h (даташит, «Command Definitions»),
+    # без разблокировки AA/55 и не по адресу 0x555. Прежняя версия слала 98h
+    # после unlock в 0x555: на части карт это не входило в режим CFI вообще.
+    flash._send(0x55, INTEL_READ_CFI if flash.wide else AMD_READ_CFI)
+
+    def rb(addr):
         return flash.read_byte(chip_abs(addr, 0, flash.chips))
 
-    if _read_byte_at(0x10) != 0x51 or _read_byte_at(0x11) != 0x52 or _read_byte_at(0x12) != 0x59:   # "QRY"
+    if rb(0x10) != 0x51 or rb(0x11) != 0x52 or rb(0x12) != 0x59:   # "QRY"
         flash.reset()
         return out
-    # Версия CFI (для отчёта)
-    out["cfi_version"] = f"{_read_byte_at(0x13)}.{_read_byte_at(0x14)}"
-    # Команда вызова CFI (для отчёта)
-    out["cfi_command"] = _read_byte_at(0x15)
-    # Производитель и устройство из CFI таблицы (для сверки с JEDEC ID)
-    out["cfi_manuf"] = _read_byte_at(0x18) | (_read_byte_at(0x19) << 8)
-    out["cfi_device"] = _read_byte_at(0x1B) | (_read_byte_at(0x1C) << 8)
-    # Размер сектора (в единицах 256 байт) и число секторов — чипа, не карты.
-    sector = (_read_byte_at(0x2C) | (_read_byte_at(0x2D) << 8)) * 256
-    count = _read_byte_at(0x2E) | (_read_byte_at(0x2F) << 8)
-    if sector and count:
-        out["sector"] = sector
-        out["size_chip"] = sector * count
-    # Возможность буферной записи: 0x2A = 2^n байт буфера (степень двойки),
-    # 0 = нет буфера. page = 1 означает обычную побайтовую программу A0h.
-    page_size_raw = _read_byte_at(0x2A)
-    out["page_size"] = page_size_raw
-    out["page"] = (1 << page_size_raw) if page_size_raw > 0 else 1
-    out["has_write_buffer"] = page_size_raw > 0
-    # Размер однократной записи и напряжения (для отчёта и сверки с даташитом).
-    out["write_size"] = _read_byte_at(0x28) | (_read_byte_at(0x29) << 8)
-    out["vcc_min_write"] = _read_byte_at(0x30) | (_read_byte_at(0x31) << 8)
-    out["vcc_max_write"] = _read_byte_at(0x32) | (_read_byte_at(0x33) << 8)
-    out["vpp_min_write"] = _read_byte_at(0x34) | (_read_byte_at(0x35) << 8)
-    out["vpp_max_write"] = _read_byte_at(0x36) | (_read_byte_at(0x37) << 8)
-    # Тайм-ауты (2^n мкс) — для корректных пределов поллинга.
-    out["timeout_program_us"] = 1 << _read_byte_at(0x36)
-    out["timeout_buffer_write_us"] = 1 << _read_byte_at(0x39)
-    out["timeout_erase_sector_us"] = 1 << _read_byte_at(0x38)
-    out["timeout_chip_erase_us"] = 1 << _read_byte_at(0x3A)
-    out["timeout_mode_switch_us"] = 1 << _read_byte_at(0x3B)
-    # Максимальное число циклов стирания/записи (для отчёта износа).
-    out["max_erase_cycles"] = _read_byte_at(0x3D) | (_read_byte_at(0x3E) << 8)
+
+    cmdset = rb(0x13) | (rb(0x14) << 8)
+    out["cmdset"] = cmdset
+    out["cmdset_name"] = {1: "Intel", 2: "AMD/Fujitsu"}.get(cmdset, "")
+    p_adr = rb(0x15) | (rb(0x16) << 8)
+    # Версия CFI лежит в расширенной таблице: 'P','R','I', major, minor.
+    if p_adr and rb(p_adr) == 0x50 and rb(p_adr + 1) == 0x52 and rb(p_adr + 2) == 0x49:
+        out["cfi_version"] = "%d.%d" % (rb(p_adr + 3), rb(p_adr + 4))
+
+    out["vcc_min_write"] = rb(0x1B) * 100        # мВ
+    out["vcc_max_write"] = rb(0x1C) * 100
+    out["vpp_min_write"] = rb(0x1D) * 100
+    out["vpp_max_write"] = rb(0x1E) * 100
+    out["timeout_program_us"] = 1 << min(rb(0x1F), 20)
+    out["timeout_buffer_write_us"] = 1 << min(rb(0x20), 20)
+    out["timeout_erase_sector_us"] = 1 << min(rb(0x21), 24)
+    out["timeout_chip_erase_us"] = 1 << min(rb(0x22), 26)
+    out["timeout_max_program_us"] = 1 << min(rb(0x23), 20)
+    out["timeout_max_erase_sector_us"] = 1 << min(rb(0x25), 24)
+
+    if rb(0x27):
+        out["size_chip"] = 1 << rb(0x27)
+    out["bus_width"] = {1: "x8", 2: "x16", 3: "x8/x16"}.get(
+        rb(0x28) | (rb(0x29) << 8), "")
+    # Буферная запись: 2^n байт, 0 - буфера нет (только побайтовая A0h).
+    exp = rb(0x2A) | (rb(0x2B) << 8)
+    has_buf = 0 < exp <= 9
+    out["page"] = (1 << exp) if has_buf else 1
+    out["has_write_buffer"] = has_buf
+
+    regions = []
+    base = 0x2D
+    for _ in range(min(rb(0x2C), 4)):
+        val = (rb(base) | (rb(base + 1) << 8) |
+               (rb(base + 2) << 16) | (rb(base + 3) << 24))
+        regions.append({"blocks": (val & 0xFFFF) + 1,
+                        "size": (val >> 16) * 256})
+        base += 4
+    if regions:
+        out["regions"] = regions
+        if len(regions) == 1:
+            out["sector"] = regions[0]["size"]
+        # CFI описывает карту секторов именно так: (блоков, размер блока).
+        # Раньше многoregion-ответ считался поводом отказаться от чипа; теперь
+        # это готовая карта, по которой считаются границы секторов.
+        out["sectors"] = [(r["size"], r["blocks"]) for r in regions]
     flash.reset()
     return out
 
 
-def verify_geometry(flash, geo, progress=None):
-    """Проверка «а та ли это микросхема» ДО стирания. Возвращает (ok, почему).
+def _restore_sector(flash, off, was):
+    """Вернуть в сектор прежние байты. Возвращает описание, что вышло.
 
-    Что проверяется и почему именно это:
-      * после стирания сектора в нём ДОЛЖНЫ быть только 0xFF - если нет,
-        значит сектор не тот (взяли 16 КиБ вместо 64 КиБ), микросхема не
-        стирается (Vpp) или стирание вообще не проходит;
-      * стирать пробуем В КОНЦЕ карты: там меньше шансов испортить данные,
-        а признак тот же. Адрес кратен предполагаемому сектору.
+    NOR-память умеет только «1 -> 0», стереть отдельный байт нельзя. Поэтому
+    писать можно лишь туда, где сейчас 0xFF, и «восстановление» - это
+    побайтовая запись прежних значений в только что стёртый сектор.
+    Если что-то вернуть не удалось - говорим прямо, а не делаем вид.
+    """
+    lost = 0
+    for i, b in enumerate(was):
+        if b == 0xFF:
+            continue
+        cur = flash.read_byte(off + i)
+        if cur == b:
+            continue
+        if cur != 0xFF:
+            lost += 1
+            continue
+        ok, _why = flash.program_byte(off + i, b)
+        if not ok:
+            lost += 1
+    if lost:
+        return "вернуть удалось не всё: %d байт не восстановлены" % lost
+    got = flash.read(off, len(was))
+    if got != was:
+        diff = sum(1 for a, b in zip(got, was) if a != b)
+        return "после возврата не совпадает %d байт" % diff
+    return "сектор возвращён как был"
+
+
+def verify_geometry(flash, geo, progress=None, backup_path=None):
+    """Проверка «а та ли это микросхема и тот ли сектор» ДО стирания.
+
+    Пассивно этого не увидеть: ошибка «взяли 64 КиБ вместо 16 КиБ» или
+    «микросхема не стирается без Vpp» проявляется только стиранием. Поэтому
+    проверка активная - но НЕ РАЗРУШАЮЩАЯ:
+
+      1. берём последний сектор карты (там обычно меньше всего данных);
+      2. снимаем его в память (и в файл, если задан backup_path) ДО стирания;
+      3. стираем и убеждаемся, что в секторе только 0xFF;
+      4. возвращаем снимок побайтово и сверяем.
+
+    Прежняя версия стирала последний сектор и НЕ возвращала данные: проверка
+    перед записью молча уничтожала сектор карты. Возврат был только при
+    --snapshot-dir, да и тот с ошибкой (проверялся не тот признак).
+
+    Возвращает (ok, почему). Сектор не остаётся стёртым молча ни при каком
+    исходе: если стирание сорвалось - всё равно пытаемся вернуть данные.
     """
     if progress:
         progress("проверяю размер сектора и отклик микросхемы")
-    sector = geo["sector"]
-    limit = geo.get("size") or 0
-    off = (limit - sector) if limit >= sector else 0
-    off -= off % sector
+    sector = int(geo.get("sector") or 0)
+    limit = int(geo.get("size") or 0)
+    if sector <= 0:
+        return True, "размер сектора неизвестен - проверка пропущена"
+    if limit < sector:
+        return True, ("ёмкость карты неизвестна или меньше сектора (%d < %d) - "
+                      "проверка пропущена" % (limit, sector))
+    # Последний сектор берём по карте: у boot-микросхем он может быть и 64 КиБ
+    # (bottom-boot), и 16 КиБ (top-boot), а «limit - sector» попадёт в
+    # середину сектора и стирание заденет два соседних.
+    off, sector = limit - sector, sector
+    spans = None
+    if getattr(flash, "sector_map", None):
+        spans = flash.spans(limit)
+    if spans:
+        off, sector = spans[-1]
+    else:
+        off -= off % sector
+
+    was = flash.read(off, sector)
+    if len(was) != sector:
+        return False, ("по адресу %#x прочиталось %d байт вместо %d: карта "
+                       "меньше, чем мы думаем" % (off, len(was), sector))
+    if backup_path:
+        try:
+            with open(backup_path, "wb") as f:
+                f.write(was)
+        except OSError as exc:
+            return False, "не смог сохранить копию сектора: %s" % exc
+
+    blank = all(b == 0xFF for b in was)
     ok, why = flash.erase_sector(off)
     if not ok:
-        return False, f"стирание сектора по адресу {off:#x}: {why}"
-    data = flash.read(off, min(sector, 4096))
-    bad = [i for i, b in enumerate(data) if b != 0xFF]
-    if bad:
-        return False, (f"после стирания по {off:#x} байт {off + bad[0]:#x} "
-                       f"читается {data[bad[0]]:#04x}, а должен 0xFF: похоже, "
-                       f"сектор не {sector // 1024} КиБ или стирание не идёт")
-    return True, f"сектор {sector // 1024} КиБ стирается по адресу {off:#x}"
+        back = "" if blank else _restore_sector(flash, off, was)
+        return False, ("сектор %d КиБ по адресу %#x не стёрся: %s%s"
+                       % (sector // 1024, off, why,
+                          ("; " + back) if back else ""))
+
+    data = flash.read(off, sector)
+    bad = next((i for i, b in enumerate(data) if b != 0xFF), None)
+    if bad is not None:
+        back = "" if blank else _restore_sector(flash, off, was)
+        return False, ("после стирания байт %#x читается %#04x вместо 0xFF: "
+                       "сектор не %d КиБ, стирание не идёт (Vpp?) или это не "
+                       "та микросхема%s"
+                       % (off + bad, data[bad], sector // 1024,
+                          ("; " + back) if back else ""))
+
+    if blank:
+        return True, ("сектор %d КиБ по адресу %#x стирается (был пуст, "
+                      "возвращать нечего)" % (sector // 1024, off))
+    back = _restore_sector(flash, off, was)
+    if back != "сектор возвращён как был":
+        return False, ("сектор стирается, но данные вернуть не удалось: %s. "
+                       "Копия сектора %s" % (back, ("в " + backup_path)
+                                             if backup_path else "потеряна"))
+    return True, ("сектор %d КиБ стирается по адресу %#x, данные возвращены"
+                  % (sector // 1024, off))
 
 
-def sector_table(geo, total):
+def sector_table(geo, total, chips=1):
     """Таблица секторов: список (начало, размер). Размер сектора - из geo.
 
-    У реальных микросхем бывает неоднородная карта (несколько маленьких
-    секторов в начале/конце). Пока набор работает с однородной, но функция
-    отдельная: когда появится карта с неоднородной, менять придётся только её.
+    У boot-микросхем карта неоднородная (16K + 8K + 8K + 32K + N x 64K, у
+    top-boot - в обратном порядке), поэтому размеры берутся из sector_map(),
+    а не из geo["sector"]. Размеры умножаются на число чипов: у пары сектор
+    8 КиБ одного чипа занимает 16 КиБ карты. Последний сектор обрезается по
+    total.
     """
-    sector = geo["sector"]
     out = []
     off = 0
     total = total or 0
+    scale = max(int(chips or 1), 1)
+    pairs = sector_map(geo)
+    if not pairs:
+        return out
     while off < total:
-        n = min(sector, total - off)
-        out.append((off, n))
-        off += n
+        step = 0
+        for size, count in pairs:
+            size *= scale
+            for _ in range(count):
+                if off >= total:
+                    return out
+                n = min(size, total - off)
+                out.append((off, n))
+                off += n
+                step += n
+        if not step:
+            break
     return out
 
 
-def flash_plan(image, sector=SECTOR):
+def flash_plan(image, sector=SECTOR, spans=None):
     """Что делать с каждым сектором: стирать или нет и какие байты писать.
 
     sector - РАЗМЕР СЕКТОРА КОНКРЕТНОЙ МИКРОСХЕМЫ (не всегда 64 КиБ).
+    spans - готовая карта секторов [(начало, размер)] в адресах карты
+    (обычно flash.spans(len(image))). Нужна для boot-микросхем, где секторы
+    разного размера: шаг «по 64 КиБ» там промахнулся бы мимо границ.
     """
     plan = []
-    for off in range(0, len(image), sector):
-        chunk = image[off:off + sector]
+    areas = spans if spans else [(off, min(sector, len(image) - off))
+                                 for off in range(0, len(image), sector)]
+    for off, size in areas:
+        chunk = image[off:off + size]
         need_erase = any(b != 0xFF for b in chunk)
         writes = [off + i for i, b in enumerate(chunk) if b != 0xFF]
         plan.append((off, need_erase, writes))
@@ -3350,7 +4041,11 @@ class NorBus:
             self.ensure(card_off + got, 1)
             take = min(n - got, self._base + self._len - (card_off + got))
             if take <= 0:
-                continue
+                # Окно не покрывает адрес (он за концом карты). Прежде здесь
+                # стоял continue - то есть бесконечный цикл вместо ошибки.
+                raise DirectError(
+                    f"адрес {card_off + got:#x} за пределами карты "
+                    f"(окно {self._base:#x}+{self._len:#x})")
             start = self._off + card_off + got - self._base
             out += self._m[start:start + take]
             got += take
@@ -3365,11 +4060,16 @@ class NorFlashIO:
 
     def __init__(self, bus, chips=2, sector=SECTOR, verbose=False, polls=None,
                  cmd=(NOR_CMD_ADDR1, NOR_CMD_ADDR2), wide=False, page=1,
-                 bypass=False, strata=False, name="", protocol="jedec"):
+                 bypass=False, strata=False, name="", protocol="jedec",
+                 sector_map=None, ro=False, ro_why=""):
         self.bus = bus
         self.chips = max(int(chips or 1), 1)
         # sector здесь - В АДРЕСАХ КАРТЫ (уже умножен на число чипов).
         self.sector = int(sector or SECTOR)
+        # sector_map - карта секторов ОДНОГО чипа: [(размер, число), ...] от
+        # младших адресов. Пусто - карта однородная (см. span()).
+        self.sector_map = [(int(size), int(count))
+                           for size, count in (sector_map or [])]
         self.protocol = protocol or "jedec"
         self.strata = bool(strata)                  # AMD/Fujitsu StrataFlash 25h/D0h
         self.verbose = verbose
@@ -3382,8 +4082,27 @@ class NorFlashIO:
         self.page_card = self.page * self.chips
         self.bypass = bool(bypass)                  # Unlock Bypass 20h есть?
         self._bypass_active = False                 # сеанс bypass открыт?
+        self._bypass_broken = False                 # bypass не работает?
         self._erase_suspended = False               # стирание приостановлено?
         self.name = name
+        # ro - микросхема в этом наборе ТОЛЬКО ЧИТАЕТСЯ: её команда стирания
+        # либо отсутствует, либо требует 12 В на Vpp, либо набор её не знает.
+        # Пишем отказ с причиной, а не «пробуем A0h и смотрим».
+        self.ro = bool(ro)
+        self.ro_why = str(ro_why or "")
+
+    # --- отказ от записи ---------------------------------------------------
+    def _readonly(self, action):
+        """(False, почему) для микросхем, которые набор только читает.
+
+        Возвращает None, если запись разрешена. Причина берётся из таблицы
+        геометрии (поле why) - это даташитная формулировка, а не догадка.
+        """
+        if not self.ro:
+            return None
+        why = self.ro_why or "её команды не подтверждены даташитом"
+        return False, (f"{self.name or 'микросхема'}: {action} в этом наборе "
+                       f"не выполняется - {why}")
 
     # --- адреса команд -----------------------------------------------------
     def cmd_addr(self, local):
@@ -3406,6 +4125,42 @@ class NorFlashIO:
 
     def read_byte(self, card_off):
         return self.bus.rd(card_off)
+
+    # --- карта секторов ----------------------------------------------------
+    def span(self, card_off):
+        """Границы сектора карты, содержащего адрес: (начало, размер).
+
+        Для boot-микросхем это единственный правильный способ: секторы там
+        разного размера (16K + 8K + 8K + 32K + N x 64K), и «округление по
+        64 КиБ» стёрло бы не то.
+        """
+        if not self.sector_map:
+            base = card_off - (card_off % self.sector)
+            return base, self.sector
+        off = 0
+        for size, count in self.sector_map:
+            size *= self.chips                     # в адресах карты
+            if card_off < off + size * count:
+                return off + ((card_off - off) // size) * size, size
+            off += size * count
+        size = self.sector_map[-1][0] * self.chips
+        return max(off - size, 0), size
+
+    def spans(self, length):
+        """Секторы карты, покрывающие первые length байт: [(начало, размер)]."""
+        if not self.sector_map:
+            return [(off, min(self.sector, length - off))
+                    for off in range(0, length, self.sector)]
+        out = []
+        off = 0
+        for size, count in self.sector_map:
+            size *= self.chips
+            for _ in range(count):
+                if off >= length:
+                    return out
+                out.append((off, min(size, length - off)))
+                off += size
+        return out
 
     # --- команды -----------------------------------------------------------
     def unlock(self):
@@ -3493,14 +4248,23 @@ class NorFlashStatus:
     def erase_suspend(self):
         """Приостановка стирания (команда B0h).
 
-        Позволяет прервать стирание сектора на время до 20 мкс, чтобы
-        прочитать данные из другого сектора. После приостановки нужно
-        вызвать erase_resume() для продолжения.
+        Позволяет приостановить стирание сектора, чтобы прочитать или записать
+        данные в ДРУГОЙ сектор, а затем продолжить (erase_resume,
+        команда 30h). Пауза не ограничена 20 мкс - ограничен только отклик на
+        саму команду B0h.
 
         Возвращает True если команда принята, False если не поддерживается.
         """
-        if self.protocol != "jedec" or not self.bypass:
-            # Erase Suspend работает у микросхем с CFI (D-ревизия и новее)
+        if self.protocol == "intel":
+            # У Intel приостановка ЕСТЬ: Erase Suspend B0h (таблица 3
+            # даташита 290429-008). Прежний комментарий «у Intel 28F
+            # приостановки нет» был неверен, а сама команда B0h лежала в
+            # константах неиспользованной.
+            for chip in range(self.chips):
+                self._intel_send(chip, INTEL_CUI_SUSPEND)
+            self._erase_suspended = True
+            return True
+        if self.protocol != "jedec":
             return False
         self._send(self.cmd1, NOR_ERASE_SUSPEND)
         self._erase_suspended = True
@@ -3511,6 +4275,12 @@ class NorFlashStatus:
 
         Возвращает True если команда принята.
         """
+        if self.protocol == "intel":
+            # Erase Resume - D0h, та же команда, что Erase Confirm.
+            for chip in range(self.chips):
+                self._intel_send(chip, INTEL_CUI_ERASE_CONFIRM)
+            self._erase_suspended = False
+            return True
         if self.protocol != "jedec":
             return False
         self._send(self.cmd1, NOR_ERASE_RESUME)
@@ -3521,10 +4291,11 @@ class NorFlashStatus:
         """Intel: сброс статусного регистра (биты 3,4,5 ставятся навсегда)."""
         if self.protocol != "intel":
             return
+        # По байту на чип (см. _intel_send): прежняя запись «50h дважды
+        # в один чип» на карте с одним чипом давала команду + данные.
         for chip in range(self.chips):
             try:
-                self.bus.wr_many(chip_abs(0, chip, self.chips),
-                                 bytes([INTEL_CUI_CLEAR_SR, INTEL_CUI_CLEAR_SR]))
+                self._intel_send(chip, INTEL_CUI_CLEAR_SR)
             except (DirectError, OSError, ValueError):
                 pass
 
@@ -3533,9 +4304,24 @@ class NorFlashStatus:
         if self.protocol != "intel":
             return self.read_byte(card_off)
         chip = chip_of(card_off, self.chips)
-        self.bus.wr_many(chip_abs(0, chip, self.chips),
-                         bytes([INTEL_CUI_READ_SR, INTEL_CUI_READ_SR]))
+        self._intel_send(chip, INTEL_CUI_READ_SR)
         return self.read_byte(card_off)
+
+    def _clear_status_and_reset(self, card_off):
+        """Очистить статус (50h) и вернуть чип в режим массива (FFh).
+
+        Даташит 28F008SA 290429-008, §4.4: биты SR.3/4/5 ставятся автоматом
+        (WSM) и снимаются ТОЛЬКО командой Clear Status Register (50h). FFh -
+        это Read Array/Reset, он их не трогает. Без 50h первая же ошибка Vpp
+        остаётся в регистре, и каждая следующая запись/стирание сразу получает
+        тот же отказ: карта выглядит мёртвой до передёргивания питания.
+        """
+        chip = chip_of(card_off, self.chips)
+        try:
+            self._intel_send(chip, INTEL_CUI_CLEAR_SR)
+        except (DirectError, OSError, ValueError):
+            pass
+        self._intel_send(chip, INTEL_CUI_RESET)
 
     def _status_ok(self, card_off, want_value=None):
         """(готово, объяснение отказа) для текущей операции.
@@ -3549,13 +4335,29 @@ class NorFlashStatus:
             return st, ""
         if not (st & SR_READY):
             return st, ""                      # ещё идёт
+        if st & SR_PROTECT:
+            # Отказ оставляет CUI в режиме статуса: дальше чтение массива
+            # вернуло бы байт статуса. Чистим статус (50h) и возвращаем чип в
+            # режим массива (FFh).
+            self._clear_status_and_reset(card_off)
+            return st, ("блок защищён (WPPS=1, block lock). У 28F004S5/008S5/016S5 снять "
+                        "программную защиту нельзя: Intel прошивает master "
+                        "lock-bit на заводе (erratum #2, 297796-007), нужны "
+                        "12 В на RP#, а слот их не даёт")
         if st & SR_VPP_LOW:
+            self._clear_status_and_reset(card_off)
             return st, ("нет напряжения программирования (VPPS=1): этой "
-                        "микросхеме нужны 12 В на Vpp, а слот их не даёт")
+                        "микросхеме нужны 12 В на Vpp, а слот их не даёт; "
+                        "статус очищен (50h), чтобы следующая попытка не "
+                        "получила тот же застарелый бит")
         if st & SR_ERASE_FAIL:
-            return st, "микросхема сообщает: стирание не удалось (ESS=1)"
+            self._clear_status_and_reset(card_off)
+            return st, ("микросхема сообщает: стирание не удалось (ESS=1); "
+                        "статус очищен (50h)")
         if st & SR_WRITE_FAIL:
-            return st, "микросхема сообщает: запись не удалась (BWS=1)"
+            self._clear_status_and_reset(card_off)
+            return st, ("микросхема сообщает: запись не удалась (BWS=1); "
+                        "статус очищен (50h)")
         return st, ""
 
     def read_id(self):
@@ -3591,6 +4393,9 @@ class NorFlashProgramming:
         bypass должен быть включён enter_bypass() перед пакетной записью и
         выключен exit_bypass() после.
         """
+        refuse = self._readonly("запись")
+        if refuse:
+            return refuse
         if self.protocol == "intel":
             return self._intel_program(card_off, value)
         if self.wide:
@@ -3600,14 +4405,25 @@ class NorFlashProgramming:
             return True, ""
         if before != 0xFF:
             return False, f"байт не стёрт ({before:#04x}) — нужна чистка сектора"
-        if self.bypass:
+        if self.bypass and not self._bypass_broken:
             # Автовход в Unlock Bypass: первая запись открывает сеанс,
             # последующие пишут за 2 цикла без повторной разблокировки.
             # Завершить сеанс нужно exit_bypass() (или reset()).
             if not self._bypass_active:
                 self.enter_bypass()
                 self._bypass_active = True
-            return self.program_byte_bypass(card_off, value)
+            ok, why = self.program_byte_bypass(card_off, value)
+            if ok:
+                return ok, why
+            # Микросхема не приняла Unlock Bypass. Так бывает: JEDEC ID у
+            # семейства один (01ADh у Am29F016, B и D), а команда 20h есть
+            # только у поздних ревизий. Откатываемся на обычную запись A0h -
+            # один раз, с предупреждением, и больше bypass не пробуем.
+            self.exit_bypass()
+            self._bypass_active = False
+            self._bypass_broken = True
+            print("  ВНИМАНИЕ: Unlock Bypass (20h) не сработал: " + why
+                  + ". Дальше пишу обычной командой A0h - медленнее, но верно.")
         self.unlock()
         self._send(self.cmd1, NOR_PROGRAM)
         self.bus.wr(card_off, value)
@@ -3644,6 +4460,9 @@ class NorFlashProgramming:
         0xFF после стирания). Нужен ровно один сценарий - «записать этот
         байт», поэтому значение берётся из card_off, а пара читается заранее.
         """
+        refuse = self._readonly("запись")
+        if refuse:
+            return refuse
         pair_at = card_off - (card_off % 2)
         before = self.read_byte(card_off)
         value = before if value is None else value
@@ -3668,8 +4487,12 @@ class NorFlashProgramming:
         data - то, что должно оказаться в карте; 0xFF означает «не трогать»
         (в NOR запись умеет только 1 -> 0, а стёртое состояние и есть 0xFF).
         Если page=1, работает обычная побайтовая запись.
-        У Intel 28F/StrataFlash с page > 1 используется буферная запись 25h/D0h.
+        У Intel 28F/StrataFlash с page > 1 используется буферная запись
+        E8h/N/D0h (Intel CUI), у AMD StrataFlash — 25h/D0h (JEDEC).
         """
+        refuse = self._readonly("запись страницы")
+        if refuse:
+            return refuse
         if len(data) > self.page_card:
             return False, f"за один раз не больше {self.page_card} байт"
         if self.page <= 1 or len(data) <= 1:
@@ -3728,19 +4551,24 @@ class NorFlashProgramming:
         return bytes(page)
 
     def _program_page_intel(self, card_off, data):
-        """StrataFlash буферная запись: 25h setup, данные, D0h confirm, опрос SR.
+        """Буферная запись Intel CUI: E8h, счётчик N, данные, D0h, опрос SR.
 
-        Последовательность (по даташиту 28F016S5 / M28F016S5):
-          1. Записать 25h в адрес буфера каждого чипа (Write-to-Buffer Setup)
-          2. Записать данные в буфер каждого чипа (по байту на чип за такт)
-          3. Записать D0h в адрес буфера каждого чипа (Buffer Write Confirm)
-          4. Опросить статусный регистр (70h) каждого чипа до WSMS=1
-          5. Сбросить каждый чип (FFh)
+        Последовательность (даташиты Intel 28F/StrataFlash, «Write to Buffer»):
+          1. E8h по адресу буфера каждого чипа (Write-to-Buffer, слово)
+          2. N = число байт минус один (N=0 -> один байт) — тоже слово
+          3. N+1 слово данных; младший байт слова - чип 0, старший - чип 1
+          4. D0h (Write Confirm) — после него начинается программирование
+          5. Опросить статусный регистр (70h) каждого чипа до WSRS=1
+          6. Сбросить каждый чип (FFh)
 
-        Каждый чип имеет свой буфер. В 16-битном режиме с 2 чипами:
-        карт-байт start+i*chips+chip → чип chip, смещение i внутри чипа.
-        page_card = page * chips байт на карте, page байт на чип.
+        Раньше здесь были 25h и побайтовые данные: 25h - это команда AMD
+        StrataFlash, а не Intel CUI, счётчика не было вовсе, а байтовые записи
+        чип в CUI не принимает (он ждёт слово). Путь не был виден только
+        потому, что у всех Intel-строк таблицы page=1.
         """
+        if self.page > INTEL_BUFFER_SIZE:
+            return False, (f"буфер записи Intel не больше {INTEL_BUFFER_SIZE} байт, "
+                           f"а в таблице page={self.page}")
         start = card_off - (card_off % self.page_card)
         if card_off != start or len(data) != self.page_card:
             return self.program_page(start, self._pad_page(start, data, card_off))
@@ -3750,26 +4578,31 @@ class NorFlashProgramming:
             if b != 0xFF and self.read_byte(start + i) != 0xFF:
                 return False, f"байт {start + i:#x} не стёрт"
 
-        # 1. 25h Setup — посылаем в каждый чип по адресу буфера (смещение 0 внутри чипа)
-        for chip in range(self.chips):
-            self._intel_send(chip, INTEL_BUFFER_SETUP, 0)
+        # 1. E8h Write-to-Buffer — в каждый чип по адресу буфера
+        # Команда Intel - СЛОВО, и оно одно на всю пару чипов: писать её
+        # «каждому чипу» нельзя - второй такой же байт чип прочтёт как
+        # счётчик N (проверено моделью).
+        self._intel_send(0, INTEL_BUFFER_SETUP, 0)
 
-        # 2. Пишем данные в буфер каждого чипа
-        # data лежит в порядке карты: start+0, start+1, start+2, ...
-        # chip 0 получает data[0], data[2], data[4]... (чётные)
-        # chip 1 получает data[1], data[3], data[5]... (нечётные)
+        # 2. Счётчик N = число байт минус один. Пишем СЛОВОМ: младший байт -
+        #    N, старший - 0 (в словесном режиме счётчик занимает DQ3-DQ0).
+        count = self.page - 1
+        self.bus.wr_many(chip_abs(0, 0, self.chips), bytes([count, 0])[:max(self.chips, 1)])
+
+        # 3. Данные — тоже СЛОВОМ: чип 0 в младшем байте, чип 1 в старшем.
+        #    data лежит в порядке карты: start+i*chips+chip.
         for i in range(self.page):
+            word = bytearray(2)
             for chip in range(self.chips):
                 byte_idx = i * self.chips + chip
-                val = data[byte_idx] if byte_idx < len(data) else 0xFF
-                addr = chip_abs(i, chip, self.chips)
-                self.bus.wr(addr, val)
+                word[chip] = data[byte_idx] if byte_idx < len(data) else 0xFF
+            self.bus.wr_many(chip_abs(i, 0, self.chips),
+                             bytes(word[:max(self.chips, 1)]))
 
-        # 3. D0h Confirm — посылаем в каждый чип
-        for chip in range(self.chips):
-            self._intel_send(chip, INTEL_BUFFER_CONFIRM, 0)
+        # 4. D0h Confirm — посылаем в каждый чип
+        self._intel_send(0, INTEL_BUFFER_CONFIRM, 0)   # тоже одно слово
 
-        # 4. Ожидание готовности через статусный регистр каждого чипа
+        # 5. Ожидание готовности через статусный регистр каждого чипа
         for chip in range(self.chips):
             addr = chip_abs(0, chip, self.chips)
             for _ in range(self.polls):
@@ -3782,7 +4615,7 @@ class NorFlashProgramming:
             else:
                 return False, f"чип {chip}, буфер {start:#x}: не дождались готовности за отведённое время"
 
-        # 5. Проверяем записанные данные
+        # 6. Проверяем записанные данные
         for i, b in enumerate(data):
             if b == 0xFF:
                 continue
@@ -3891,7 +4724,11 @@ class NorFlashProgramming:
         дублируются в оба байта.
         """
         base = chip_abs(addr_local or 0, chip, self.chips)
-        self.bus.wr_many(base, bytes([op, op]))
+        # Ровно по байту на чип пары: у карты с ДВУМЯ чипами это два байта
+        # (команда доходит до обоих), у карты с ОДНИМ - один байт. Прежнее
+        # bytes([op, op]) на одном чипе давало команду, а следом уже данные
+        # (40h как данные) - запись уезжала в мусор.
+        self.bus.wr_many(base, bytes([op] * max(self.chips, 1)))
         return base
 
     def _intel_word_base(self, card_off):
@@ -3932,7 +4769,7 @@ class NorFlashProgramming:
 
     def _intel_erase(self, card_off):
         """Стирание блока по командам CUI: 20h (setup), затем D0h (confirm)."""
-        base = card_off - (card_off % self.sector)
+        base, _size = self.span(card_off)
         for chip in range(self.chips):
             local = chip_local(base, self.chips)
             self._intel_send(chip, INTEL_CUI_ERASE_SETUP, local)
@@ -3942,6 +4779,12 @@ class NorFlashProgramming:
                 st, why = self._status_ok(addr)
                 if why:
                     return False, f"чип {chip}, блок {base:#x}: {why}"
+                if st & SR_SUSPEND:
+                    # WSMS=1 при приостановке тоже, но блок не стёрт: без
+                    # этой проверки «пауза» выглядела бы успешным стиранием.
+                    return False, (f"чип {chip}, блок {base:#x}: стирание "
+                                   "приостановлено (SR.6=1) — сначала Erase "
+                                   "Resume (D0h), потом повторить")
                 if st & SR_READY:
                     break
             else:
@@ -3986,7 +4829,10 @@ class NorFlashErase:
         Если послать одну команду по чётному адресу, второй чип не сотрётся,
         и запись в нечётные байты провалится с «байт не стёрт».
         """
-        base = card_off - (card_off % self.sector)
+        refuse = self._readonly("стирание сектора")
+        if refuse:
+            return refuse
+        base, _size = self.span(card_off)
         if self.protocol == "intel":
             return self._intel_erase(base)
         # base - АБСОЛЮТНОЕ смещение; чипу нужен адрес ВНУТРИ него, поэтому
@@ -3997,8 +4843,12 @@ class NorFlashErase:
             self.unlock()
             self._send(self.cmd1, NOR_ERASE_SETUP)
             self.unlock()
-            self._send(self.cmd1, NOR_ERASE_SECTOR)
-            self.bus.wr(addr, 0xFF)
+            # Шестой цикл - 30h ПО АДРЕСУ СЕКТОРА (даташит, «Sector Erase
+            # Command Sequence»; так же делают flashrom: issuecmd(0x30, page)
+            # и ядро Linux: map_write(map, cfi->sector_erase_cmd, adr)).
+            # Раньше здесь стояло _send(self.cmd1, ...) + wr(addr, 0xFF):
+            # команда уходила в 0x555, то есть ВСЕГДА стирала сектор 0.
+            self.bus.wr(addr, NOR_ERASE_SECTOR)
             ok, why = self._wait_erase(addr)
             if not ok:
                 self.reset()
@@ -4011,6 +4861,9 @@ class NorFlashErase:
         В таблице 9 документа её нет: только пошаговое стирание блоков.
         Поэтому здесь честный отказ, а не «попробуем 10h и посмотрим».
         """
+        refuse = self._readonly("стирание чипа")
+        if refuse:
+            return refuse
         if self.protocol == "intel":
             return False, ("у Intel 28F008SA нет команды «стереть весь чип»: "
                            "стирать нужно поблочно (это и делает обычная запись)")
@@ -4110,7 +4963,9 @@ def flash_probe(flash, offset=0, payload=None, progress=None):
     трогая остальное содержимое. payload - что записать (по умолчанию
     узор: 0x00,0xFF,0x55,0xAA, 0..255 - ловит залипшие линии данных).
     """
-    sector = flash.sector
+    # границы сектора - по карте: у boot-чипа первый сектор 16 КиБ, и проба
+    # «на 64 КиБ» вышла бы за него в соседние секторы
+    offset, sector = flash.span(offset)
     if payload is None:
         pattern = bytearray([0x00, 0xFF, 0x55, 0xAA] * 64)
         pattern += bytes(range(256)) * 2
@@ -4168,8 +5023,7 @@ def flash_probe_safe(flash, offset=0, backup_dir=None, progress=None):
     этом говорится прямо (а не «всё хорошо»).
     """
     import os as _os
-    sector = flash.sector
-    base = offset - (offset % sector)
+    base, sector = flash.span(offset)
     if progress:
         progress("читаю сектор, чтобы его не потерять")
     original = flash.read(base, sector)
@@ -4264,6 +5118,47 @@ def writes_for_bypass(plan):
     return any(bool(writes) for _, _, writes in plan)
 
 
+def _erase_sector_guarded(flash, off):
+    """Стереть сектор и убедиться, что байты ЗА ЕГО ГРАНИЦАМИ не изменились.
+
+    Зачем: ошибка в таблице микросхем («сектор 64 КиБ» там, где на железе
+    128 КиБ) по самому сектору не видна — он-то сотрётся. Видна она по соседу:
+    если байт за границей сектора был не 0xFF и стал 0xFF, значит стёрся блок
+    БОЛЬШЕ заявленного, и соседние данные потеряны. Проверять это надо ДО
+    записи: тогда отказ честный, а не «записалось, но сосед испорчен».
+
+    Соседа два: последний байт слева и первый справа. Соседей, которые уже
+    0xFF, не проверяем — по ним ничего не видно.
+    """
+    start, size = flash.span(off)
+    probes = {}
+    for probe in (start - 1, start + size):
+        if probe < 0 or probe == off:
+            continue
+        try:
+            b = flash.read(probe, 1)[0]
+        except (DirectError, OSError, ValueError):
+            continue                      # за пределами карты — проверять нечего
+        if b != 0xFF:
+            probes[probe] = b
+    ok, why = flash.erase_sector(off)
+    if not ok:
+        return ok, why
+    for probe, was in probes.items():
+        try:
+            now = flash.read(probe, 1)[0]
+        except (DirectError, OSError, ValueError):
+            continue
+        if now != was:
+            return False, (
+                f"стёрся блок БОЛЬШЕ, чем записано в таблице: байт {probe:#x} "
+                f"за границей сектора {start:#x}+{size:#x} был {was:#04x}, "
+                f"стал {now:#04x}. Модель микросхемы неверна (у настоящей блок "
+                f"длиннее) — стирание остановлено, чтобы не потерять остальное. "
+                f"Проверьте имя в --chip и размер сектора в --sector")
+    return True, ""
+
+
 def flash_write_image(flash, image, progress=None, verify=True,
                       erase_first=False, journal=None, resume=False,
                       remote_dir=None, backup_dir=None):
@@ -4280,7 +5175,7 @@ def flash_write_image(flash, image, progress=None, verify=True,
     Это позволяет восстановить сектор, если запись прервётся или карта
     окажется изношенной.
     """
-    plan = flash_plan(image, flash.sector)
+    plan = flash_plan(image, flash.sector, flash.spans(len(image)))
     total = len(plan)
     res = {"sectors": total, "erased": 0, "bytes": 0, "ok": False,
            "failed_at": None, "why": "", "backups": []}
@@ -4334,7 +5229,7 @@ def flash_write_image(flash, image, progress=None, verify=True,
             backup_path = _os.path.join(backup_dir,
                                         f"sector-{off:08x}.bin")
             try:
-                sector_data = flash.read(off, flash.sector)
+                sector_data = flash.read(off, flash.span(off)[1])
                 with open(backup_path, "wb") as bf:
                     bf.write(sector_data)
                 res["backups"].append(backup_path)
@@ -4344,7 +5239,7 @@ def flash_write_image(flash, image, progress=None, verify=True,
                               f"{off:#x}: {error}")
                 return res
         if need_erase:
-            ok, why = flash.erase_sector(off)
+            ok, why = _erase_sector_guarded(flash, off)
             if not ok:
                 res["failed_at"] = off
                 res["why"] = f"стирание сектора {off:#x}: {why}"
@@ -4352,7 +5247,7 @@ def flash_write_image(flash, image, progress=None, verify=True,
             res["erased"] += 1
             # Blank check: после стирания сектор должен быть целиком 0xFF.
             # Если нет — сектор изношен, и запись в него ненадёжна.
-            blank = flash.read(off, flash.sector)
+            blank = flash.read(off, flash.span(off)[1])
             bad = [i for i, b in enumerate(blank) if b != 0xFF]
             if bad:
                 res["failed_at"] = off + bad[0]
@@ -4363,13 +5258,13 @@ def flash_write_image(flash, image, progress=None, verify=True,
                               f"Сектор изношен или защищён.")
                 return res
         elif erase_first:
-            ok, why = flash.erase_sector(off)
+            ok, why = _erase_sector_guarded(flash, off)
             if not ok:
                 res["failed_at"] = off
                 res["why"] = f"стирание сектора {off:#x}: {why}"
                 return res
             res["erased"] += 1
-            blank = flash.read(off, flash.sector)
+            blank = flash.read(off, flash.span(off)[1])
             bad = [i for i, b in enumerate(blank) if b != 0xFF]
             if bad:
                 res["failed_at"] = off + bad[0]
@@ -4534,10 +5429,17 @@ def _flash_open(args, want_write=True, probe=True):
     protocol = geo.get("protocol", "jedec")
     # geo["sector"] у identify_chip уже умножен на число чипов (адреса карты)
     sector_card = geo.get("sector") or SECTOR
+    # Перед выдачей объекта, который умеет стирать, карта секторов должна быть
+    # согласована: без неё границы сектора считались бы «по 64 КиБ» и первое
+    # же стирание boot-чипа задело бы соседние данные.
+    check_sector_map(geo, strict=True)
     flash = NorFlash(bus, chips=chips, sector=sector_card, cmd=tuple(geo["cmd"]),
                      wide=geo["wide"], page=geo.get("page") or 1,
                      bypass=bool(geo.get("bypass")),
-                     name=geo.get("name", ""), protocol=protocol)
+                     name=geo.get("name", ""), protocol=protocol,
+                     sector_map=geo.get("sectors") or None,
+                     ro=bool(geo.get("ro")),
+                     ro_why=str(geo.get("why") or ""))
     return {"dev": dev, "exca": exca, "wins": wins, "win": win, "mem": mem,
             "bus": bus, "flash": flash, "chips": chips, "size": size,
             "src": src, "geo": geo, "info": info}
@@ -4562,9 +5464,16 @@ def _flash_report(parts, extra_lines=()):
           + (f" ({size / 1024 / 1024:.1f} МиБ)" if size else ""))
     card_sec = geo.get("sector") or (SECTOR * max(int(chips), 1))
     chip_sec = geo.get("sector_chip") or -(-card_sec // max(int(chips), 1))
-    print(f"  сектор стирания       : {card_sec // 1024} КиБ в адресах карты "
-          f"({chip_sec // 1024} КиБ на чип x {chips} чип.)"
-          + ("" if chip_sec == 64 << 10 else "  — НЕ 64 КиБ, учтено"))
+    smap = sector_map(geo)
+    if len(smap) > 1:
+        # boot-микросхема: одной цифрой «размер сектора» её не описать
+        layout = " + ".join(f"{cnt} x {sz // 1024} КиБ" for sz, cnt in smap)
+        print(f"  карта секторов        : {layout} (неоднородная, "
+              f"на чип; в адресах карты x {chips})")
+    else:
+        print(f"  сектор стирания       : {card_sec // 1024} КиБ в адресах карты "
+              f"({chip_sec // 1024} КиБ на чип x {chips} чип.)"
+              + ("" if chip_sec == 64 << 10 else "  — НЕ 64 КиБ, учтено"))
     print("  протокол команд       : "
           + ("CUI Intel 28F (20h/D0h, статусный регистр 70h)"
              if geo.get("protocol") == "intel"
@@ -4572,25 +5481,30 @@ def _flash_report(parts, extra_lines=()):
     print(f"  адреса команд         : {cmd[0]:#x} / {cmd[1]:#x}"
           + (", команда СЛОВОМ (Intel 28F)" if geo.get("wide") else ", командой байт")
           + (f", страница {geo.get('page')} байт" if (geo.get("page") or 1) > 1 else ""))
+    if geo.get("unverified"):
+        print("  ВНИМАНИЕ: параметры не сверены с даташитом: "
+              + (geo.get("src") or "источника нет")[:110])
+        print("            первый сектор проверьте на копии карты "
+              "(или укажите --chip с проверенной моделью)")
     if geo.get("autodetect"):
         ad = geo["autodetect"]
         bits = []
         if ad.get("manuf") is not None:
             bits.append(f"ID {ad['manuf']:#04x}:{ad['device']:#04x}")
-        if ad.get("cfi_manuf") is not None:
-            bits.append(f"CFI-производитель {ad['cfi_manuf']:#04x}")
-        if ad.get("cfi_device") is not None:
-            bits.append(f"CFI-устройство {ad['cfi_device']:#04x}")
+        if ad.get("cmdset_name"):
+            bits.append("CFI, набор команд " + ad["cmdset_name"])
         if ad.get("cfi_version"):
-            bits.append(f"CFI v{ad['cfi_version']}")
-        if ad.get("sector"):
-            bits.append(f"CFI: сектор {ad['sector'] // 1024} КиБ на чип")
+            bits.append("CFI v" + str(ad["cfi_version"]))
+        for reg in ad.get("regions") or []:
+            bits.append("CFI: %d x %d КиБ" % (reg["blocks"], reg["size"] // 1024))
         if ad.get("size_chip"):
-            bits.append(f"CFI: ёмкость чипа {ad['size_chip'] / 1024 / 1024:.0f} МиБ")
-        if ad.get("max_erase_cycles"):
-            bits.append(f"CFI: до {ad['max_erase_cycles']} циклов стирания")
+            bits.append("CFI: ёмкость чипа %.1f МиБ"
+                        % (ad["size_chip"] / 1024 / 1024))
         if ad.get("has_write_buffer") and ad.get("page") and ad["page"] > 1:
             bits.append(f"CFI: буфер записи {ad['page']} байт")
+        if ad.get("timeout_erase_sector_us"):
+            bits.append("CFI: стирание сектора до %.0f мс"
+                        % (ad["timeout_erase_sector_us"] / 1000))
         if bits:
             print("  ответ микросхемы      : " + "; ".join(bits))
     print(f"  окно моста            : {parts['win']['start']:#x}, "
@@ -4628,7 +5542,10 @@ def _identify_chip_main(args):
             warn.append("микросхеме нужны 12 В на Vpp: в слоте ноутбука их нет, "
                         "запись с неё невозможна (для Kontron PC/104-PCMCIA-1 - "
                         "только если 12 В подведены по PC/104)")
-        if geo.get("protocol") == "intel":
+        if geo.get("ro"):
+            warn.append("микросхема только ЧИТАЕТСЯ: "
+                        + str(geo.get("why") or "команды не подтверждены"))
+        elif geo.get("protocol") == "intel":
             warn.append("протокол Intel CUI: стирание только поблочно, "
                         "команды словом; статус читается регистром (70h)")
         if geo.get("name") in ("неизвестная", ""):
@@ -4673,29 +5590,21 @@ def _flash_main(args):
         print("  а паспорт просто старый.")
         return 4
     try:
-        # ДО любой записи: та ли микросхема? Проверяется стиранием последнего
-        # сектора и чтением 0xFF. Стирать пробуем в конце карты: там меньше
-        # данных, а признак тот же. Данные этого сектора сохраняются, если
-        # указан --snapshot-dir, и восстанавливаются после проверки.
+        # ДО любой записи: та ли микросхема и тот ли сектор? Проверка активная
+        # (стиранием последнего сектора), но не разрушающая: снимок сектора
+        # снимается ДО стирания и возвращается после - внутри verify_geometry.
         if not getattr(args, "no_geometry_check", False) and parts["size"]:
-            off = max(0, (parts["size"] - flash.sector))
-            off -= off % flash.sector
-            back = None
-            if args.snapshot_dir:
-                back = flash.read(off, flash.sector)
+            backup = None
+            if getattr(args, "snapshot_dir", None):
+                os.makedirs(args.snapshot_dir, exist_ok=True)
+                backup = os.path.join(
+                    args.snapshot_dir,
+                    "geometry_probe_%#x.bin" % parts["size"])
             ok_g, why_g = verify_geometry(flash, {"sector": flash.sector,
-                                                  "size": parts["size"]})
+                                                  "size": parts["size"]},
+                                          backup_path=backup)
             print("  проверка геометрии    : " + ("ок - " if ok_g else "НЕ ТАК - ")
                   + why_g)
-            if back is not None:
-                flash.erase_sector(off)
-                for i, b in enumerate(back):
-                    if b != 0xFF:
-                        flash.program_byte(off + i, b)
-                got = flash.read(off, flash.sector)
-                print("  сектор проверки       : "
-                      + ("возвращён как был" if got == back
-                         else "ВЕРНУТЬ НЕ УДАЛОСЬ (файл не нужен: данные выше)"))
             if not ok_g:
                 print("\nИТОГ: не начинаю стирание/запись - не сходится тип "
                       "микросхемы.")
@@ -4709,13 +5618,13 @@ def _flash_main(args):
             if img_path:
                 try:
                     with open(img_path, "rb") as f:
-                        head = f.read(flash.sector)
+                        head = f.read(flash.span(0)[1])
                     touches = any(b != 0xFF for b in head)
                 except OSError:
                     touches = True
             probe0 = (args.write_probe and int(args.sector or 0, 0) == 0) or touches
             if probe0:
-                back = flash.read(0, flash.sector)
+                back = flash.read(0, flash.span(0)[1])
                 has_cis = (b"CIS" in back or info.get("offset") is not None or
                            any(b != 0xFF for b in back))
                 if has_cis:
@@ -4767,16 +5676,22 @@ def _flash_main(args):
             print(f"ОШИБКА: образ {len(data)} байт больше карты "
                   f"({parts['size']} байт) - запись отменена", file=sys.stderr)
             return 2
-        if len(data) % SECTOR:
-            print(f"ОШИБКА: размер образа ({len(data)}) не кратен сектору "
-                  f"{SECTOR}: так писать нельзя - неясно, что делать с "
-                  "хвостом", file=sys.stderr)
+        # Границы секторов - по карте микросхемы: у boot-чипов они разного
+        # размера, и «кратно 64 КиБ» ничего не гарантирует. Запрещаем образ,
+        # который обрезает сектор посередине: хвост остался бы стёртым.
+        spans = flash.spans(len(data))
+        _off, _sz = spans[-1]
+        _full = flash.span(_off)[1]
+        if _sz != _full:
+            print(f"ОШИБКА: размер образа ({len(data)}) обрезает сектор "
+                  f"{_off:#x} ({_sz} из {_full} байт): так писать нельзя - "
+                  "хвост сектора остался бы стёртым", file=sys.stderr)
             return 2
         if parts["size"] and len(data) < parts["size"]:
             left = parts["size"] - len(data)
             print(f"ВНИМАНИЕ: образ меньше карты на {left} байт; эти секторы "
                   "останутся как есть (набор их не стирает).")
-        plan = flash_plan(data)
+        plan = flash_plan(data, flash.sector, spans)
         need = sum(1 for _o, e, _w in plan if e)
         nbytes = sum(len(w) for _o, _e, w in plan)
         print(f"\nПлан: секторов всего {len(plan)}, из них стирать {need}, "
@@ -4837,8 +5752,9 @@ def _flash_main(args):
         except (DirectError, OSError):
             pass
         parts["bus"].close()
-        if restore_window(mem, exca, snap, dev):
-            pass
+        if not restore_window(mem, exca, snap, dev):
+            print("  ВНИМАНИЕ: окно моста вернуть не удалось. Если карта "
+                  "перестала читаться - выключите и включите слот.")
         mem.close()
 
 

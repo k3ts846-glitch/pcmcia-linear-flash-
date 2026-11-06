@@ -25,12 +25,12 @@ jobs:
       # неопределённые имена и битые конструкции. Именно она ловит
       # опечатки вида NOR_ERASE_SUSPEND без импорта.
       - name: Lint (errors only, blocking)
-        run: ruff check src/ tests/ --select E9,F63,F7,F82
+        run: ruff check src/ tests/ *.py --select E9,F63,F7,F82
 
       # Стиль и придирки (E501 и т.п.) — информативно, сборку не валят.
       - name: Lint (style, informational)
         continue-on-error: true
-        run: ruff check src/ tests/ --output-format=concise
+        run: ruff check src/ tests/ *.py --output-format=concise
 
   test:
     runs-on: ubuntu-latest
@@ -58,6 +58,11 @@ jobs:
 
       - name: Консольные скрипты набора
         run: .github/run-and-annotate.sh python tests/test_scripts.py
+
+      # Регрессии, найденные при разборе кода: адрес 30h при стирании,
+      # возврат данных после проверки геометрии, раскладка CFI, boot-чипы.
+      - name: Регрессии стирания, CFI и геометрии
+        run: .github/run-and-annotate.sh python tests/test_flash_regressions.py
 
   # Проверки, которым нужна графика (Tk) и Xvfb.
   extras:

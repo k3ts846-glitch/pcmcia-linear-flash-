@@ -86,6 +86,19 @@ def _build_geometry(chips: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "protocol": chip.get("protocol", "jedec"),
             "volts": chip.get("volts", 5),
             "manuf": chip.get("manuf", ""),
+            # sectors - карта секторов ОДНОГО чипа: [(размер, число), ...]
+            # от младших адресов. Нужна для boot-микросхем, где первый сектор
+            # 16 КиБ, дальше 8+8+32 КиБ, и только потом 64 КиБ: стирать их
+            # «сектором 64 КиБ» нельзя. Пустой список - карта однородная,
+            # её собирает chips.sector_map из sector и size.
+            "sectors": [(int(size) * 1024, int(count))
+                        for size, count in (chip.get("sectors") or [])],
+            "notes": chip.get("notes", ""),
+            "why": chip.get("why", ""),
+            # Строка есть, но её параметры не сверены с даташитом: чип рабочий,
+            # отчёт обязан об этом предупредить (в монолите такие строки уже
+            # есть - HN28F*, LH28F*, D28F*, M28F008/016, M5M29F*, MX29F3210).
+            "unverified": bool(chip.get("unverified", False)),
         }
     return geometry
 

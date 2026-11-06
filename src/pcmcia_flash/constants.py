@@ -31,6 +31,12 @@ SR_READY = 0x80            # WSMS: операция завершена
 SR_ERASE_FAIL = 0x20       # ESS: стирание не удалось
 SR_WRITE_FAIL = 0x10       # BWS: запись не удалось
 SR_VPP_LOW = 0x08          # VPPS: нет напряжения программирования
+# SR.6: стирание приостановлено (B0h). WSMS при этом = 1, поэтому проверять
+# отдельно, иначе приостановленное стирание выглядит завершённым (290429-008).
+SR_SUSPEND = 0x40
+SR_PROTECT = 0x02          # WPPS: операция попала в защищённый блок
+                           # (у 28Fxxx снимается только 12 В на RP#,
+                           # erratum #2 в 297796-007)
 
 # --- команды Intel CUI -------------------------------------------------------
 INTEL_CUI_RESET = 0xFF
@@ -44,7 +50,8 @@ INTEL_CUI_ALT_WRITE = 0x10
 INTEL_CUI_SUSPEND = 0xB0
 
 # --- буферная запись Intel StrataFlash (25h / D0h) --------------------------
-INTEL_BUFFER_SETUP = 0x25
+# Intel CUI: Write to Buffer = E8h + счётчик N + D0h (25h - это AMD)
+INTEL_BUFFER_SETUP = 0xE8
 INTEL_BUFFER_CONFIRM = 0xD0
 INTEL_BUFFER_SIZE = 32     # слов на чип = 32 байта на чип
 
@@ -72,7 +79,7 @@ __all__ = [
     "NOR_UNLOCK1", "NOR_UNLOCK2",
     "NOR_SECTOR_PROTECT", "NOR_ERASE_SUSPEND", "NOR_ERASE_RESUME",
     "DQ7", "DQ5",
-    "SR_READY", "SR_ERASE_FAIL", "SR_WRITE_FAIL", "SR_VPP_LOW",
+    "SR_READY", "SR_ERASE_FAIL", "SR_WRITE_FAIL", "SR_VPP_LOW", "SR_SUSPEND",
     "INTEL_CUI_RESET", "INTEL_CUI_READ_ID", "INTEL_CUI_READ_SR",
     "INTEL_CUI_CLEAR_SR", "INTEL_CUI_ERASE_SETUP", "INTEL_CUI_ERASE_CONFIRM",
     "INTEL_CUI_WRITE_SETUP", "INTEL_CUI_ALT_WRITE", "INTEL_CUI_SUSPEND",

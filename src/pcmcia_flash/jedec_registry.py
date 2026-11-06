@@ -50,12 +50,28 @@ FUJITSU_ETALON = {
 }
 
 # Intel: Device ID читается через CUI Read ID (90h)
+#
+# Сверено с двумя независимыми таблицами: flashrom include/flashchips.h и
+# drivers/mtd/chips/jedec_probe.c из ядра Linux.
+#   0xA0 - flashrom: INTEL_28F016SV «28F016SA/SV»; ядро: I28F016S5 0x00a0.
+#          Ёмкость и раскладка у них одинаковые (2 МиБ, 32 блока по 64 КиБ),
+#          поэтому имя берём из своей таблицы - 28F016SV.
+#   0xA2 - обе таблицы: 28F008SA (1 МиБ, 16 блоков).
+#   0xA6 - ядро: I28F008S5 0x00a6; flashrom: «28F008S3/S5/SC» (1 МиБ).
+#   0xA7 - flashrom: INTEL_28F004S3 «28F008S3/S5/SC» (0.5 МиБ, 8 блоков).
+# Прежние записи 0xA6 -> 28F016SV, 0xB5 -> 28F002SA и 0xB6 -> 28F004SA были
+# выдуманы: 28F002SA/28F004SA не существуют, а 0xB5/0xB6 в ядре - это SST
+# SST39SF010A/SST39SF020A (производитель BFh, не 89h). Их убрали, чтобы
+# реестр не подтверждал сам себя.
 INTEL_ETALON = {
-    0xA1: ("28F016SA", "Intel datasheet, Device ID = A1H"),
-    0xA2: ("28F008SA", "Intel datasheet, Device ID = A2H"),
-    0xA6: ("28F016SV", "Intel datasheet, Device ID = A6H"),
-    0xB5: ("28F002SA", "Intel datasheet, Device ID = B5H"),
-    0xB6: ("28F004SA", "Intel datasheet, Device ID = B6H"),
+    0xA0: ("28F016SV", "flashrom flashchips.h INTEL_28F016SV 0xA0 («28F016SA/SV»); "
+                       "ядро jedec_probe.c: тот же A0h у 28F016S5"),
+    0xA2: ("28F008SA", "flashrom flashchips.h INTEL_28F008SA 0xA2; "
+                       "ядро jedec_probe.c I28F008SA 0x00a2"),
+    0xA6: ("28F008S5", "ядро jedec_probe.c I28F008S5 0x00a6; "
+                       "flashrom: 0xA6 = 28F008S3/S5/SC"),
+    0xA7: ("28F004S5", "flashrom flashchips.h: 0xA7 = 28F004S3/S5/SC "
+                       "(байтовые Smart 3/5, 8 блоков по 64 КиБ)"),
 }
 
 # Производители JEDEC (Manufacturer ID)

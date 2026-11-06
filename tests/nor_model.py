@@ -21,6 +21,7 @@ pcmcia_direct.py (GEOMETRY) - то есть проверяется ровно т
 """
 import importlib.util
 import os
+import pathlib
 
 MIB = 1 << 20
 CHIP = 2 * MIB          # Am29F016 = 16 Мбит = 2 МиБ
@@ -105,7 +106,7 @@ class ModelCardIO:
             cfi = self._cfi_bytes()
             return cfi[local] if local < len(cfi) else 0x00
         if mode == "protect":
-            grp = (local >> 6) & 0x07
+            grp = (local >> 16) & 0x07
             return 0x01 if self.protect_groups[grp] else 0x00
         if mode == "erase_suspended":
             return self.raw(off)
@@ -127,9 +128,11 @@ class ModelCardIO:
 
     def write_many(self, addr, data):
         if self.protocol == "intel":
-            if len(data) == 2:
-                return self._cui_step(addr // self.chips,
-                                      data[0] | (data[1] << 8))
+            # Команда идёт ПО БАЙТУ НА ЧИП: у пары - два байта (слово), у
+            # одиночного чипа - один. Всё остальное - неверная ширина.
+            if len(data) == self.chips:
+                word = data[0] | ((data[1] if len(data) > 1 else data[0]) << 8)
+                return self._cui_step(addr // self.chips, word)
             self.bad_wide_cmds += 1
             return
         if self.state == "prog" and len(data) > 1:
@@ -180,6 +183,19 @@ class ModelCardIO:
 class ModelCardState:
     """Конечный автомат модели: обработка команд шины (store, CUI, режимы)."""
 
+    def _sector_at(self, local):
+        """Границы сектора ЧИПА, содержащего local: (начало, размер)."""
+        if not self.sector_map:
+            sector = self.sector // max(self.chips, 1)
+            return local - (local % sector), sector
+        off = 0
+        for size, count in self.sector_map:
+            if local < off + size * count:
+                return off + ((local - off) // size) * size, size
+            off += size * count
+        size = self.sector_map[-1][0]
+        return max(off - size, 0), size
+
     def store(self, off, val, wide=False, chip=None, local=None):
         """Один байт в шину. chip/local можно задать напрямую (см. write_many)."""
         d = self.d
@@ -201,27 +217,26 @@ class ModelCardState:
             if self.prog_left <= 0:
                 self.state = "bypass" if self.bypass else "idle"
             return
-        if st == "erase_addr":
-            if getattr(self, "erase_left", 1) > 1:
-                self.erase_left -= 1
-                return
-            self.state = "idle"
-            if self.refuse_erase:
-                self.erase_fail = True
-                return
-            if self.quiet_erase:
-                return
-            base = local - (local % (self.sector // 2))
-            for i in range(base, min(base + self.sector // 2, self.chip_size)):
-                self.mem[chip][i] = 0xFF
-            self.erases += 1
-            return
         if st == "erase_cmd":
-            if local == self.cmd[0] and val == d.NOR_ERASE_SECTOR:
-                self.state = "erase_addr"
-                self.erase_left = 2 if self.wide else 1
-                return
+            # Даташит (AMD/MX «Sector Erase Command Sequence», 6 циклов):
+            # шестой цикл — 30h ПО АДРЕСУ СТИРАЕМОГО СЕКТОРА. Сектор выбирают
+            # старшие биты этого адреса (A19-A12), а не командный 0x555.
+            # Поэтому модель стирает тот сектор, куда реально попал адрес:
+            # если код пошлёт 30h в 0x555, сотрётся сектор 0 - ровно как на
+            # настоящей карте. Так ошибка в адресе становится видимой в тесте.
             self.state = "idle"
+            if val == d.NOR_ERASE_SECTOR:
+                self.erase_targets.append((chip, local))
+                if self.refuse_erase:
+                    self.erase_fail = True
+                    return
+                if self.quiet_erase:
+                    return
+                base, chip_sector = self._sector_at(local)
+                for i in range(base, min(base + chip_sector, self.chip_size)):
+                    self.mem[chip][i] = 0xFF
+                self.erases += 1
+            return
         self.cmds.append((local, val))
         if val in (d.NOR_RESET, d.INTEL_RESET) and st != "buffer_write":
             self._mode = "array"
@@ -235,9 +250,19 @@ class ModelCardState:
         if st == "u1" and local == self.cmd[1] and val == d.NOR_UNLOCK2:
             self.state = "u2"
             return
+        # CFI Query: ОДИН цикл, адрес 55h, данные 98h (без разблокировки).
+        if st == "idle" and local == 0x55 and val == d.AMD_READ_CFI:
+            if not self.no_cfi:
+                self._mode = "cfi"
+            return
         if st == "u2" and local == self.cmd[0]:
             self._mode_hook(local, val)
             if val == d.NOR_BYPASS:
+                if not self.supports_bypass:
+                    # Микросхема не знает команды 20h: игнорирует её, как
+                    # настоящая. Именно так выглядит карта с Am29F016 (без D).
+                    self.state = "idle"
+                    return
                 self.bypass = True
                 self.state = "bypass"
                 return
@@ -294,8 +319,16 @@ class ModelCardState:
 
         def W(v):
             return (v & 0xFF) | ((v & 0xFF) << 8)
+        def locked(off):
+            """Блок защищён? У Intel это WPPS=1 (бит 1 статуса)."""
+            return bool(self.protect_groups[(off >> 16) & 0x07])
+
         if cmd == "write":
             st["cmd"] = None
+            if locked(local):
+                st["sr"] = d.SR_READY | d.SR_PROTECT
+                st["mode"] = "sr"
+                return
             if local in self.refuse_program:
                 self.fail_off = local
                 st["sr"] = d.SR_READY | d.SR_WRITE_FAIL
@@ -307,8 +340,48 @@ class ModelCardState:
             st["sr"] = d.SR_READY
             st["mode"] = "sr"
             return
+        if cmd == "buffer_cmd":
+            # Второй такт: N - число записываемых байт минус один (N=0 -> 1)
+            st["buf_left"] = (word & 0xFF) + 1
+            st["buf_data"] = []
+            st["cmd"] = "buffer_data"
+            return
+        if cmd == "buffer_data":
+            if st["buf_left"] > 0:
+                st["buf_data"].append((local, word))
+                st["buf_left"] -= 1
+                if st["buf_left"] == 0:
+                    st["cmd"] = "buffer_confirm"
+                return
+        if cmd == "buffer_confirm":
+            st["cmd"] = None
+            if word != W(d.INTEL_BUFFER_CONFIRM):
+                # Даташит: любой другой байт вместо D0h отменяет буфер
+                st["sr"] = d.SR_READY | d.SR_WRITE_FAIL
+                st["mode"] = "sr"
+                return
+            for off, w in st["buf_data"]:
+                if locked(off):
+                    st["sr"] = d.SR_READY | d.SR_PROTECT
+                    st["mode"] = "sr"
+                    return
+            for off, w in st["buf_data"]:
+                if off in self.refuse_program:
+                    self.fail_off = off
+                    continue
+                self.mem[0][off] &= w & 0xFF
+                if self.chips > 1:
+                    self.mem[1][off] &= (w >> 8) & 0xFF
+            st["sr"] = d.SR_READY
+            st["mode"] = "sr"
+            return
         if cmd == "erase":
             st["cmd"] = None
+            if locked(local):
+                st["sr"] = d.SR_READY | d.SR_PROTECT
+                st["mode"] = "sr"
+                self.erase_fail = True
+                return
             if word != W(d.INTEL_CUI_ERASE_CONFIRM):
                 st["sr"] = d.SR_READY | d.SR_WRITE_FAIL
                 st["mode"] = "sr"
@@ -353,6 +426,13 @@ class ModelCardState:
         if word in (W(d.INTEL_CUI_WRITE_SETUP), W(d.INTEL_CUI_ALT_WRITE)):
             st["cmd"] = "write"
             return
+        if word == W(d.INTEL_BUFFER_SETUP):
+            # E8h: Write to Buffer (даташит Intel, «Write to Buffer»)
+            st["cmd"] = "buffer_cmd"
+            return
+        # Неизвестная команда: настоящая микросхема её игнорирует, а модель
+        # считает - так старый протокол 25h (AMD) становится видимым в тесте.
+        self.bad_cui_cmds += 1
         st["cmd"] = None
 
     def _mode_hook(self, local, val):
@@ -388,6 +468,26 @@ class ModelCardState:
             return False
         off = self.win_card + (addr - self.win_start)
         return 0 <= off and off + n <= self.chips * self.chip_size
+
+
+_INTEL_IDS = None
+
+
+def _intel_id_from_registry(chip_name):
+    """Код устройства Intel из эталонного реестра (data/jedec_registry.json)."""
+    global _INTEL_IDS
+    if _INTEL_IDS is None:
+        import json
+        path = pathlib.Path(__file__).resolve().parent.parent / "src" / \
+            "pcmcia_flash" / "data" / "jedec_registry.json"
+        try:
+            reg = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _INTEL_IDS = {}
+        else:
+            _INTEL_IDS = {info["chip"].upper(): int(key, 16)
+                          for key, info in (reg.get("Intel") or {}).items()}
+    return _INTEL_IDS.get(str(chip_name).upper())
 
 
 class ModelCardProgramming:
@@ -429,12 +529,18 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
                  blank=True, refuse_program=(), refuse_erase=False,
                  quiet_erase=False, stuck=None, answer_id=True,
                  sector_override=None, card_mib=4, no_vpp=False,
-                 page_size_cfi=0):
+                 page_size_cfi=0, supports_bypass=True, no_cfi=False):
         self.d = load_direct(kit or os.environ.get("KIT_DIR", "."))
         g = self.d.geometry_for(chip_name)
         self.chip_name = chip_name
         self.protocol = g.get("protocol", "jedec")
         self.sector_chip = int(sector_override or g["sector"])
+        # Карта секторов ОДНОГО чипа: у boot-микросхем она неоднородная
+        # (16K + 8K + 8K + 32K + N x 64K, у top-boot - наоборот). Модель
+        # стирает именно тот сектор, в который попал адрес 30h, поэтому
+        # «округление по sector» тут повторяло бы ошибку кода, а не ловило её.
+        self.sector_map = [(int(sz), int(cnt))
+                           for sz, cnt in (g.get("sectors") or [])]
         self.cmd = tuple(g["cmd"])
         self.wide = bool(g["wide"])
         self.chip_size = int(chip_size or g["size"] or CHIP)
@@ -456,6 +562,8 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
         self.no_vpp = no_vpp       # нет 12 В на Vpp: статус скажет VPPS=1
         self.stuck = stuck
         self.page_size_cfi = page_size_cfi
+        self.supports_bypass = supports_bypass   # чип знает команду 20h?
+        self.no_cfi = no_cfi                     # чип не отвечает на 98h
         self.state = "idle"
         self.fail_page = None
         self.protect_groups = [False] * 8   # состояние защиты 8 групп секторов
@@ -463,6 +571,7 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
         self.page_writes = 0
         self.prog_left = 1
         self.erase_left = 1
+        self.erase_targets = []          # (чип, адрес), по которым пришёл 30h
         self._mode = "array"
         self.bypass = False          # Unlock Bypass активен: A0h принимается без разблокировки
         self.fail_off = None
@@ -471,41 +580,91 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
         self.reads = self.writes = self.erases = 0
         self.cmds = []
         self.bad_wide_cmds = 0       # команды, поданные не словом
+        self.bad_cui_cmds = 0        # неизвестные команды в Intel CUI (например 25h)
         self._dq7_polls_left = 0     # счётчик отложенных чтений с DQ7=1 после D0h
 
     def _id_values(self):
+        # Intel: код берём из эталонного реестра data/jedec_registry.json, а не
+        # из таблиц кода - иначе модель повторит ошибку кода (раньше здесь
+        # стояло 0xA0 для 28F008SA, хотя это код 28F016SV, и выдуманный A1h).
+        if self.chip_name.upper().startswith("28F"):
+            got = _intel_id_from_registry(self.chip_name)
+            if got is not None:
+                return (0x89, got)
         table = {"Am29F016": (0x01, 0xAD), "Am29F032": (0x01, 0x34),
                  "Am29F080": (0x01, 0x58), "Am29F040": (0x01, 0xA4),
                  "Am29LV016": (0x01, 0x49), "28F008SA": (0x89, 0xA0),
-                 "28F016SA": (0x89, 0xA1), "MBM29F016": (0x04, 0xAD)}
+                 # коды с ревизией - по include/flashchips.h (flashrom):
+                 # 58h = Am29F800BB, D6h = Am29F800BT, ABh = Am29F400BB,
+                 # 23h = Am29F400BT, 57h = Am29F200BB, 51h = Am29F200BT
+                 "Am29F800BB": (0x01, 0x58), "Am29F800BT": (0x01, 0xD6),
+                 "Am29F400AB": (0x01, 0xAB), "Am29F400AT": (0x01, 0x23),
+                 "Am29F200AB": (0x01, 0x57), "Am29F200AT": (0x01, 0x51),
+                 "Am29F080B": (0x01, 0xBA), "Am29LV001BB": (0x01, 0x6D),
+                 "Am29LV001BT": (0x01, 0xED),
+                 "MBM29F016": (0x04, 0xAD)}
         return table.get(self.chip_name, (0x01, 0xFF))
 
     def _cfi_bytes(self):
-        """Мини-CFI: "QRY", размер сектора, multibyte-write, напряжения.
+        """Мини-таблица CFI ровно по раскладке CFI Publication 100 / cfi.h.
 
-        Поля по даташиту JEDEC CFI. page_size=0 означает отсутствие буфера
-        записи (побайтовая программа A0h), как у Am29F016/032.
+        Смещения (сверено с include/linux/mtd/cfi.h, struct cfi_ident):
+
+          0x10-0x12  "QRY";
+          0x13-0x14  набор команд (02h = AMD/Fujitsu);
+          0x15-0x16  адрес расширенной таблицы (0x40, там "PRI"+версия);
+          0x1B-0x1E  Vcc min/max, Vpp min/max при записи (100 мВ);
+          0x1F-0x22  типовые тайм-ауты (2^n мкс);
+          0x27       ёмкость чипа: 2^n байт;
+          0x28-0x29  разрядность шины;
+          0x2A-0x2B  буферная запись: 2^n байт (0 = нет);
+          0x2C       число erase-регионов;
+          0x2D-0x30  регион: блоков-1 (16 бит), размер/256 (16 бит).
+
+        Модель обязана отдавать таблицу именно в этой раскладке - раньше она
+        повторяла ошибку кода (поля на байт раньше), и тест ничего не ловил.
+        page_size_cfi=0 означает отсутствие буфера записи, как у Am29F016.
         """
-        cfi = bytearray(0x40)
+        cfi = bytearray(0x48)
         cfi[0x10:0x13] = b"QRY"
-        cfi[0x13] = 0x02          # версия CFI 2.0 (старший байт)
+        cfi[0x13] = 0x02                      # набор команд: AMD/Fujitsu
         cfi[0x14] = 0x00
-        sector = self.sector_chip
-        cfi[0x2C] = (sector >> 8) & 0xFF
-        cfi[0x2D] = (sector >> 16) & 0xFF
-        count = self.chip_size // sector
-        cfi[0x2E] = count & 0xFF
-        cfi[0x2F] = (count >> 8) & 0xFF
-        cfi[0x28] = 0x01
+        cfi[0x15] = 0x40                      # P_ADR -> расширенная таблица
+        cfi[0x16] = 0x00
+        cfi[0x1B] = 30                        # Vcc min 3.0 В (100 мВ)
+        cfi[0x1C] = 36                        # Vcc max 3.6 В
+        cfi[0x1D] = 0                         # Vpp нет
+        cfi[0x1E] = 0
+        cfi[0x1F] = 0x07                      # запись слова: 128 мкс
+        cfi[0x20] = 0x09                      # буфер: 512 мкс
+        cfi[0x21] = 0x0A                      # сектор: 1 мс (типовая)
+        cfi[0x22] = 0x0C                      # чип: 4 мс (типовая)
+        cfi[0x23] = 0x0B                      # запись слова: 2048 мкс (макс)
+        cfi[0x25] = 0x0E                      # сектор: 16 мс (макс)
+        size = self.chip_size
+        cfi[0x27] = size.bit_length() - 1 if size else 0     # 2^n байт
+        cfi[0x28] = 0x01                      # x8
         cfi[0x29] = 0x00
-        cfi[0x2A] = self.page_size_cfi
-        cfi[0x30] = 0x50
-        cfi[0x31] = 0x00
-        cfi[0x34] = 0xFF
-        cfi[0x35] = 0x00
-        cfi[0x36] = 0x07
-        cfi[0x38] = 0x0A
-        cfi[0x3A] = 0x0C
+        cfi[0x2A] = self.page_size_cfi        # 2^n байт буфера, 0 = нет
+        cfi[0x2B] = 0x00
+        # Erase-регионы. У boot-микросхем их ровно 4 (16K, 2x8K, 32K,
+        # N x 64K), и CFI отдаёт их именно так - в таблице 4 слота по 4 байта.
+        if self.sector_map:
+            regions = list(self.sector_map)[:4]
+        else:
+            sector = self.sector_chip
+            regions = [(sector, max(size // sector, 1))]
+        cfi[0x2C] = len(regions)              # число erase-регионов
+        base = 0x2D
+        for region_size, region_count in regions:
+            cfi[base] = (region_count - 1) & 0xFF        # блоков - 1 (мл.)
+            cfi[base + 1] = ((region_count - 1) >> 8) & 0xFF
+            cfi[base + 2] = (region_size // 256) & 0xFF  # размер / 256 (мл.)
+            cfi[base + 3] = ((region_size // 256) >> 8) & 0xFF
+            base += 4
+        cfi[0x40:0x43] = b"PRI"               # расширенная таблица
+        cfi[0x43] = 0x01                      # версия CFI 1.2
+        cfi[0x44] = 0x02
         return bytes(cfi)
 
 
@@ -567,5 +726,8 @@ def make(kit=None, span=MIB, **kw):
                        cmd=card.cmd, wide=card.wide,
                        page=geo.get("page") or 1,
                        bypass=bool(geo.get("bypass")),
-                       name=card.chip_name, protocol=card.protocol)
+                       name=card.chip_name, protocol=card.protocol,
+                       sector_map=geo.get("sectors") or None,
+                       ro=bool(geo.get("ro")),
+                       ro_why=str(geo.get("why") or ""))
     return card, bus, flash
