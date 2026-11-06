@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+.card-state.txt
+
+# офлайн-набор пакетов .deb — не в git (место для него — GitHub Releases)
+debs/
+
+# инструменты и временные файлы
+.venv/
+htmlcov/
+.coverage
+*.tar.gz
+*.whl

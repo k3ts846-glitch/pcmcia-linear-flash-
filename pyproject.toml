@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pcmcia-flash-kit"
+description = "Пульт управления линейной флеш-картой PCMCIA с Windows-машины: паспорт карты, образ, запись, сверка"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Proprietary" }
+authors = [{ name = "PCMCIA FLASH KIT" }]
+keywords = ["pcmcia", "linear-flash", "jedec", "cis", "ssh"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "Topic :: System :: Hardware",
+  "Natural Language :: Russian",
+  "Natural Language :: English",
+]
+dependencies = []
+dynamic = ["version"]
+
+[project.scripts]
+# Основная команда: `pcmcia-kit` (Windows-пульт) и `pcmcia-flash` (флеш-программатор).
+pcmcia-kit = "pcmcia_kit.cli:main"
+pcmcia-flash = "pcmcia_flash.cli:main"
+
+[project.gui-scripts]
+# Графический пульт.
+pcmcia-kit-gui = "pcmcia_kit.gui:main"
+
+[project.urls]
+Documentation = "./ИНСТРУКЦИЯ.md"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"pcmcia_flash" = ["_version.py"]
+"pcmcia_kit" = ["_version.py"]
+
+[tool.setuptools.dynamic]
+version = { attr = "pcmcia_kit.__version__" }
+
+[tool.ruff]
+line-length = 96
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = ["-q"]
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/legacy/*",
+]
+
+[tool.coverage.report]
+fail_under = 80
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+]
