@@ -810,6 +810,45 @@ check("Am29DL32xDB: в карте 71 сектор (8 boot + 63), SecSi не в �
       and sum(n for _s, n in C.sector_map(C.CHIP_GEOMETRY["Am29DL322DB"])) == 71)
 
 
+# --- 14. Пятый заход: ST M28F102 (стирание только целиком) и DL640 ---------
+# Даташит ST M28F102 (август 1998): «1 Mbit (64Kb x16, Bulk) Flash Memory»,
+# «5V ±10% supply, 12V programming», «ELECTRICAL CHIP ERASE in 1s», 64 Kword x
+# 16 бит = 128 КиБ. В таблице стояло 256 КиБ и шестнадцать секторов по 16 КиБ -
+# неверно и то, и другое: поблочного стирания у чипа нет вообще.
+section("ST M28F102: 128 КиБ и стирание только целиком")
+
+m102 = D.GEOMETRY["M28F102"]
+check("M28F102: 128 КиБ (1 Мбит), а не 256 КиБ",
+      m102["size"] == 128 << 10, str(m102["size"]))
+check("M28F102: 12 В (Vpp при программировании)", m102["volts"] == 12)
+try:
+    D.check_sector_map(D.geometry_for("M28F102"))
+    refuse = ""
+except D.DirectError as exc:
+    refuse = str(exc)
+check("M28F102: отказ «стирание только целиком», а не 16 секторов по 16 КиБ",
+      "целиком" in refuse and "Sector Erase" in refuse, refuse[:80])
+
+# 64-Мбит семейство Am29DL640D/G: четыре банка, восемь 8-КиБ секторов снизу И
+# восемь сверху (Both Top and Bottom Boot), между ними 126 по 64 КиБ.
+dl64 = D.GEOMETRY["Am29DL642"]
+check("Am29DL642: 8 МиБ и 3 В", dl64["size"] == 8 << 20 and dl64["volts"] == 3)
+try:
+    D.check_sector_map(D.geometry_for("Am29DL642"))
+    refuse64 = ""
+except D.DirectError as exc:
+    refuse64 = str(exc)
+check("Am29DL642/643: в отказе сказано про 8-КиБ boot-секторы и ревизию",
+      "8 КиБ" in refuse64 and "D или G" in refuse64, refuse64[:90])
+
+# 64 МиБ = 8 x 8 КиБ (низ) + 126 x 64 КиБ + 8 x 8 КиБ (верх): сумма сходится,
+# это и есть та карта, которую пришлось бы применять, если бы ревизия была
+# известна. Проверяем арифметику, а не «на глаз».
+both_boot = (8 * 8192) + (126 * 65536) + (8 * 8192)
+check("раскладка DL640 «8 КиБ + 126 x 64 КиБ + 8 КиБ» = 8 МиБ",
+      both_boot == 8 << 20, str(both_boot))
+
+
 # Две реализации должны говорить об одном и том же: пакет и монолит -
 # независимые копии, и именно так они разошлись (28F016S5: 128 КиБ против
 # 64 КиБ, дело дошло до ложного отказа blank-check).

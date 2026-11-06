@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.6"          # версия набора: печатается в отчёте и в --selftest
+KIT_VERSION = "2.17.7"          # версия набора: печатается в отчёте и в --selftest
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -2871,8 +2871,13 @@ GEOMETRY = {
                      src="Fujitsu MBM29F004: ревизия не указана - укажите "
                          "MBM29F004TC (top-boot) или MBM29F004BC (bottom-boot)"),
     # --- ST Microelectronics ---
-    "M28F102": dict(sector=16 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                    size=256 << 10, volts=12, src="ST M28F102: сектор 16 КиБ, Vpp 12 В"),
+    "M28F102": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                    size=128 << 10, volts=12, ambiguous=True,
+                    why="стирание только целиком (bulk/chip erase, 12 В при "
+                        "программировании), команды Sector Erase нет",
+                    src="ST M28F102 (август 1998): 1 Мбит = 64K x 16 = 128 КиБ, "
+                        "5 В питания и 12 В программирования, «Electrical CHIP "
+                        "ERASE in 1s»; поблочного стирания нет"),
     "M28F016": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                     size=2 << 20, volts=12, unverified=True,
                      src="ST M28F016: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
@@ -3058,15 +3063,18 @@ GEOMETRY = {
                       src="AMD Am29DL323D (21534d), Table 2: 3,0 В, boot 8 КиБ"),
     "Am29DL642": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
                       size=8 << 20, volts=3, bypass=True, strata=True, ambiguous=True,
-                      why="AMD Am29DL642: 64-Мбит двухбанковое семейство с boot-"
-                          "секторами 8 КиБ, однородных 64 КиБ у него нет; даташита "
-                          "этой ревизии под рукой нет - раскладку не сверяли",
-                      src="семейство Am29DL64x, 3,0 В (по аналогии с 21534d)"),
+                      why="AMD Am29DL642: 64-Мбит семейство Am29DL640D/G - четыре "
+                          "банка, восемь boot-секторов по 8 КиБ снизу И восемь "
+                          "сверху («Both Top and Bottom Boot»), между ними 126 по "
+                          "64 КиБ; однородных 64 КиБ нет. Укажите ревизию D или G",
+                      src="AMD Am29DL640D (23695C3) / Am29DL640G (25693B): 3,0 В, "
+                          "8 КиБ + 126 x 64 КиБ + 8 КиБ"),
     "Am29DL643": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
                       size=8 << 20, volts=3, bypass=True, strata=True, ambiguous=True,
-                      why="AMD Am29DL643: см. Am29DL642 - 8-КиБ boot-секторы, точная "
-                          "раскладка ревизии не сверена; укажите конкретную часть",
-                      src="семейство Am29DL64x, 3,0 В (по аналогии с 21534d)"),
+                      why="AMD Am29DL643: то же семейство Am29DL640D/G (x16): восемь "
+                          "8-КиБ boot-секторов снизу и восемь сверху, 126 x 64 КиБ; "
+                          "укажите ревизию D или G",
+                      src="AMD Am29DL640D (23695C3) / Am29DL640G (25693B): 3,0 В"),
     # Конкретные ревизии: карта из Table 5 (bottom) и Table 3 (top) даташита
     # 21534d. Сумма 8x8K + 63x64K = 4 МиБ, сходится с Table 2.
     "Am29DL322DB": dict(sector=8 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
