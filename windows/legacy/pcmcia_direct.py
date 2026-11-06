@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.7"          # версия набора: печатается в отчёте и в --selftest
+KIT_VERSION = "2.17.8"          # версия набора: печатается в отчёте и в --selftest
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -894,6 +894,7 @@ VPP5 = {"Am29F016", "Am29F800", "Am29F400", "Am29F040", "Am29F200", "Am29F010",
         "Am29DL322", "Am29DL323", "Am29DL642", "Am29DL643",
         "Am29DL322DB", "Am29DL322DT", "Am29DL323DB", "Am29DL323DT",
         "Am29DL324DB", "Am29DL324DT", "MBM29DL322BE", "MBM29DL322TE",
+        "Am29LV033C",
         "Am29GL064", "Am29GL128", "Am29GL256", "Am29GL512", "Am29GL1024",
         "MBM29DL322", "MBM29DL642", "MBM29GL064", "MBM29GL128"}
 # Intel Series 2 - это 28F 5-вольтовая серия: запись без 12 В, но у части
@@ -2735,10 +2736,10 @@ GEOMETRY = {
                          "«The device now has the Unlock Bypass Program "
                          "feature»), поэтому по умолчанию не шлём"),
     "Am29F032": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=4 << 20, volts=5, bypass=True,
-                     src="AMD Am29F032: 64 x 64 КиБ, 5 В. Программи-"
-                         "рование побайтно (A0h, 4 цикла); ускорение - "
-                         "Unlock Bypass 20h (2 цикла на байт)"),
+                     size=4 << 20, volts=5, bypass=True, unverified=True,
+                     src="AMD Am29F032: в селекторе AMD 32-Мбит 5-вольтовая часть "
+                         "называется Am29F032B, имени без B там нет; параметры "
+                         "(64 x 64 КиБ, 5 В) взяты как у Am29F032B - не сверены"),
     "Am29F080": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      size=1 << 20, volts=5, bypass=False,
                      src="AMD Am29F080: 16 x 64 КиБ, 5 В, побайтно A0h; Unlock "
@@ -2846,9 +2847,20 @@ GEOMETRY = {
                          "секторов SA0-SA7 в даташите 21116). Unlock Bypass у "
                          "исходного Am29F010 нет - он появился в поздних "
                          "ревизиях, поэтому пишем обычной командой A0h"),
+    # Селектор AMD: в ряду 32 Мбит 5 В есть ТОЛЬКО Am29F032B (4M x 8);
+    # «Am29F033» в нём нет, а 32-Мбитная x16 часть у AMD трёхвольтовая -
+    # Am29LV033C. Поэтому не догадка, а отказ с двумя настоящими именами.
     "Am29F033": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=4 << 20, volts=5, bypass=True,
-                     src="AMD Am29F033: 64 x 64 КиБ, 5 В. Unlock Bypass 20h"),
+                     size=4 << 20, volts=5, bypass=True, ambiguous=True,
+                     why="у AMD нет 5-вольтовой 32-Мбитной части Am29F033: "
+                         "5-вольтовая называется Am29F032B (4M x 8), а 32-Мбитная "
+                         "x16 - трёхвольтовая Am29LV033C",
+                     src="AMD FLASH MEMORY PRODUCT SELECTOR GUIDE: 32 Mbit - Am29F032B"),
+    "Am29LV033C": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                       size=4 << 20, volts=3, bypass=False,
+                       src="AMD Am29LV033C: 32 Мбит (4M x 8), 3,0 В, однородные "
+                           "секторы; Unlock Bypass даташитом не подтверждён - "
+                           "работает штатная A0h"),
     # ====================================================================
     # Дополнительные NOR-флеш микросхемы, встречающиеся на PCMCIA-картах
     # (все параметры из даташитов производителей; для чипов без точных
@@ -2860,8 +2872,10 @@ GEOMETRY = {
                        size=2 << 20, volts=5, bypass=True,
                        src="Fujitsu MBM29F016A: 32 x 64 КиБ, 5 В, аналог Am29F016"),
     "MBM29F033": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                      size=4 << 20, volts=5, bypass=True,
-                      src="Fujitsu MBM29F033: 64 x 64 КиБ, 5 В (данные по умолчанию)"),
+                      size=4 << 20, volts=5, bypass=True, unverified=True,
+                      src="Fujitsu MBM29F033: имени нет ни в flashchips.h, ни в "
+                          "jedec_probe.c; 64 x 64 КиБ и 5 В - данные по умолчанию, "
+                          "даташитом не сверены"),
     "MBM29F002": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
                      size=256 << 10, volts=5,
                      src="Fujitsu MBM29F002: ревизия не указана - укажите "

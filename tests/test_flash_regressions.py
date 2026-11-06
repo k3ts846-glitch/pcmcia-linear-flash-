@@ -695,7 +695,8 @@ check("MX29F1610: прежние 64 КиБ - отказ, сосед назван
 UNVERIFIED = {"D28F010", "D28F020", "HN28F010", "HN28F020", "HN28F100",
               "LH28F010", "LH28F020", "M28F008", "M28F016",
               "M5M29F010", "M5M29F020", "MX29F3210",
-              "Am29PL320", "Am29PL640", "Am29PL1280"}
+              "Am29PL320", "Am29PL640", "Am29PL1280",
+              "Am29F032", "MBM29F033"}
 got = {n for n, g in D.GEOMETRY.items() if g.get("unverified")}
 check("помечены «не сверено» ровно %d строк" % len(UNVERIFIED),
       got == UNVERIFIED, str(sorted(got ^ UNVERIFIED)))
@@ -847,6 +848,56 @@ check("Am29DL642/643: в отказе сказано про 8-КиБ boot-сек
 both_boot = (8 * 8192) + (126 * 65536) + (8 * 8192)
 check("раскладка DL640 «8 КиБ + 126 x 64 КиБ + 8 КиБ» = 8 МиБ",
       both_boot == 8 << 20, str(both_boot))
+
+
+# --- 15. Шестой заход: «Am29F032/033» - каких частей у AMD не было ---------
+# Селектор AMD (FLASH MEMORY PRODUCT SELECTOR GUIDE): в ряду 32 Мбит 5 В есть
+# ТОЛЬКО Am29F032B (4M x 8, «64 uniform sectors of 64 Kbytes each», 21610D8);
+# 32-Мбитная x16 часть у AMD трёхвольтовая - Am29LV033C. Ни «Am29F032», ни
+# «Am29F033» в селекторе нет, и «64 x 64 КиБ, 5 В, Unlock Bypass 20h» было
+# догадкой, выданной за факт.
+section("Am29F032B и Am29LV033C вместо «Am29F032/033»")
+
+try:                                  # именно параметры 032B подтверждены
+    C.check_sector_map(C.geometry_for("Am29F032B"))
+    ok032b = False
+except C.UnsupportedChip:
+    ok032b = True
+check("Am29F032B: 64 x 64 КиБ, 5 В (даташит 21610D8)", not ok032b
+      and C.CHIP_GEOMETRY["Am29F032B"]["size"] == 4 << 20
+      and C.sector_map(C.CHIP_GEOMETRY["Am29F032B"]) == [(65536, 64)])
+
+try:
+    D.check_sector_map(D.geometry_for("Am29F033"))
+    refuse033 = ""
+except D.DirectError as exc:
+    refuse033 = str(exc)
+check("Am29F033: отказ называет Am29F032B и Am29LV033C",
+      "Am29F032B" in refuse033 and "Am29LV033C" in refuse033, refuse033[:90])
+
+for name in ("Am29F032", "MBM29F033"):
+    geo = D.GEOMETRY.get(name) or {}
+    ok_flag = bool(geo.get("unverified"))
+    usable = True
+    try:
+        D.check_sector_map(D.geometry_for(name))
+    except D.DirectError:
+        usable = False
+    check("%s: работает, но помечен «не сверено»" % name,
+          ok_flag and usable and geo.get("size") == 4 << 20)
+
+# Новая строка: 32-Мбитная трёхвольтовая часть, чтобы было что указать вместо
+# несуществующей «Am29F033».
+bad = []
+for where, table in (("монолит", D.GEOMETRY), ("пакет", C.CHIP_GEOMETRY)):
+    geo = table.get("Am29LV033C")
+    if not geo:
+        bad.append("%s: нет строки" % where)
+    elif (geo["size"] != 4 << 20 or geo.get("volts") != 3
+          or C.sector_map(geo) != [(65536, 64)] or geo.get("bypass")):
+        bad.append("%s: %s %sВ %s bypass=%s" % (where, geo["size"], geo.get("volts"),
+                                                C.sector_map(geo), geo.get("bypass")))
+check("Am29LV033C: 4 МиБ, 3 В, 64 x 64 КиБ, без Unlock Bypass", not bad, str(bad))
 
 
 # Две реализации должны говорить об одном и том же: пакет и монолит -
