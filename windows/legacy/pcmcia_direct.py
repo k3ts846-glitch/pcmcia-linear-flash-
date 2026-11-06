@@ -844,7 +844,14 @@ FUJITSU_PARTS = {
     0xAD: ("MBM29F016A", 16), # 2 МиБ = 16 Мбит, аналог Am29F016
     0xA4: ("MBM29F040C", 4),  # 512 КиБ = 4 Мбит
 }
-VENDOR_PARTS = {0x01: AMD_PARTS, 0x04: FUJITSU_PARTS}
+# STMicroelectronics: вендор 20h; у M29F400B коды 00D5h (top-boot) и 00D6h
+# (bottom-boot) - даташит «M29F400BT/M29F400BB», раздел Electronic Signature.
+# Это ДРУГИЕ коды, чем у AMD при её вендоре 01h (там D5h - Am29F080).
+STMICRO_PARTS = {
+    0xD5: ("M29F400BT", 4),   # 512 КиБ = 4 Мбит, top-boot
+    0xD6: ("M29F400BB", 4),   # 512 КиБ = 4 Мбит, bottom-boot
+}
+VENDOR_PARTS = {0x01: AMD_PARTS, 0x04: FUJITSU_PARTS, 0x20: STMICRO_PARTS}
 
 
 def vendor_part(vid, did):
@@ -865,7 +872,7 @@ def vendor_part(vid, did):
 VPP126 = {"Am28F256", "Am28F512", "Am28F010", "Am28F020", "28F256", "28F512",
           "28F010", "28F020",
           "D28F010", "D28F020", "LH28F010", "LH28F020",
-          "M28F008", "M28F002", "M28F004", "M28F016", "M28F102"}
+          "M28F008", "M28F016", "M28F102"}
 VPP5 = {"Am29F016", "Am29F800", "Am29F400", "Am29F040", "Am29F200", "Am29F010",
         "Am29F032/Am29F033", "Am29F080", "Am29LV016", "MBM29F016",
         # имена с ревизией (boot-чипы и B-ревизии) - тоже 5.0 V only
@@ -874,8 +881,11 @@ VPP5 = {"Am29F016", "Am29F800", "Am29F400", "Am29F040", "Am29F200", "Am29F010",
         "Am29LV001BB", "Am29LV001BT", "Am29LV040B", "Am29LV400BB",
         "Am29LV400BT", "Am29LV800BB", "Am29LV800BT", "Am29LV160DB",
         "Am29LV160DT", "MBM29F016A", "MBM29F040C",
+        # Fujitsu/Spansion и ST: 2 и 4 Мбит boot-block, 5.0 V only
+        "MBM29F002TC", "MBM29F002BC", "MBM29F004TC", "MBM29F004BC",
+        "M29F002BT", "M29F002BB", "M29F400BT", "M29F400BB",
         "HN28F010", "HN28F020", "HN28F100",
-        "M5M29F010", "M5M29F020", "M5M29F400",
+        "M5M29F010", "M5M29F020",
         "MX29F1610", "MX29F3210",
         "SST39VF010", "SST39VF020", "SST39VF040", "SST39VF080",
         "TC58FVT160", "TC58FVT320",
@@ -2752,6 +2762,53 @@ GEOMETRY = {
     # 28F016SA — thirty-two 64-KB blocks (2 MByte). Сектор здесь — у одного чипа;
     # в адресах карты с двумя чипами логический блок удваивается.
     # Для записи/стирания нужен Vpp 12 В (VPPH 11.4...12.6 В).
+    # --- Fujitsu MBM29F002/004 и ST M29F002/M29F400 (boot-блоки) ----------
+    # Fujitsu DS05-20868-3E (MBM29F002TC/BC): «One 16K byte, two 8K bytes, one
+    # 32K byte, and three 64K bytes», «T = Top sector, B = Bottom sector».
+    # 4-Мбит ревизии - тот же ряд блоков, что у AMD Am29F004B (даташит: «One
+    # 16 Kbyte, two 8 Kbyte, one 32 Kbyte, and seven 64 Kbyte sectors»).
+    "MBM29F002TC": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                        wide=False, size=256 << 10, volts=5, bypass=False,
+                        sectors=[(65536, 3), (32768, 1), (8192, 2), (16384, 1)],
+                        src="Fujitsu MBM29F002TC: 2 Мбит, top-boot: 3 x 64K + "
+                            "32K + 2 x 8K + 16K"),
+    "MBM29F002BC": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                        wide=False, size=256 << 10, volts=5, bypass=False,
+                        sectors=[(16384, 1), (8192, 2), (32768, 1), (65536, 3)],
+                        src="Fujitsu MBM29F002BC: 2 Мбит, bottom-boot: 16K + "
+                            "2 x 8K + 32K + 3 x 64K"),
+    "MBM29F004TC": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                        wide=False, size=512 << 10, volts=5, bypass=False,
+                        sectors=[(65536, 7), (32768, 1), (8192, 2), (16384, 1)],
+                        src="Fujitsu MBM29F004TC: 4 Мбит, top-boot: 7 x 64K + "
+                            "32K + 2 x 8K + 16K"),
+    "MBM29F004BC": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                        wide=False, size=512 << 10, volts=5, bypass=False,
+                        sectors=[(16384, 1), (8192, 2), (32768, 1), (65536, 7)],
+                        src="Fujitsu MBM29F004BC: 4 Мбит, bottom-boot: 16K + "
+                            "2 x 8K + 32K + 7 x 64K"),
+    # ST: «11 memory blocks - 1 Boot Block, 2 Parameter and 8 Main Blocks»
+    # (M29F400B) и «7 blocks - 1 Boot, 2 Parameter, 4 Main» (M29F002B).
+    "M29F002BT": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                      wide=False, size=256 << 10, volts=5, bypass=False,
+                      sectors=[(65536, 3), (32768, 1), (8192, 2), (16384, 1)],
+                      src="ST M29F002BT: 2 Мбит, top-boot: 3 x 64K + 32K + "
+                          "2 x 8K + 16K"),
+    "M29F002BB": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                      wide=False, size=256 << 10, volts=5, bypass=False,
+                      sectors=[(16384, 1), (8192, 2), (32768, 1), (65536, 3)],
+                      src="ST M29F002BB: 2 Мбит, bottom-boot: 16K + 2 x 8K + "
+                          "32K + 3 x 64K"),
+    "M29F400BT": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                      wide=False, size=512 << 10, volts=5, bypass=False,
+                      sectors=[(65536, 7), (32768, 1), (8192, 2), (16384, 1)],
+                      src="ST M29F400BT: 4 Мбит, top-boot, код 00D5h при "
+                          "вендоре 20h"),
+    "M29F400BB": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
+                      wide=False, size=512 << 10, volts=5, bypass=False,
+                      sectors=[(16384, 1), (8192, 2), (32768, 1), (65536, 7)],
+                      src="ST M29F400BB: 4 Мбит, bottom-boot, код 00D6h при "
+                          "вендоре 20h"),
     # --- микросхемы из сверенного реестра JEDEC ID (см. AMD_PARTS) ---
     "Am29F017D": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                       size=2 << 20, volts=5, bypass=True,
@@ -2802,25 +2859,38 @@ GEOMETRY = {
                       src="Fujitsu MBM29F033: 64 x 64 КиБ, 5 В (данные по умолчанию)"),
     "MBM29F002": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
                      size=256 << 10, volts=5,
-                     src="2 Мбит: раскладка boot-секторов зависит от ревизии - "
-                         "уточните по даташиту и укажите --sector"),
+                     src="Fujitsu MBM29F002: ревизия не указана - укажите "
+                         "MBM29F002TC (top-boot) или MBM29F002BC (bottom-boot)"),
     "MBM29F004": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
                      size=512 << 10, volts=5,
-                     src="4 Мбит: раскладка boot-секторов зависит от ревизии - "
-                         "уточните по даташиту и укажите --sector"),
+                     src="Fujitsu MBM29F004: ревизия не указана - укажите "
+                         "MBM29F004TC (top-boot) или MBM29F004BC (bottom-boot)"),
     # --- ST Microelectronics ---
     "M28F102": dict(sector=16 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                     size=256 << 10, volts=12, src="ST M28F102: сектор 16 КиБ, Vpp 12 В"),
-    "M28F002": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
-                     size=256 << 10, volts=5,
-                     src="2 Мбит: раскладка boot-секторов зависит от ревизии - "
-                         "уточните по даташиту и укажите --sector"),
-    "M28F004": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
-                     size=512 << 10, volts=5,
-                     src="4 Мбит: раскладка boot-секторов зависит от ревизии - "
-                         "уточните по даташиту и укажите --sector"),
     "M28F016": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                     size=2 << 20, volts=12, src="ST M28F016: 2 MiB, Vpp 12 В (данные по умолчанию)"),
+    # Имена, которых НЕТ в даташитах: ST выпускала 2/4-Мбит boot-block как
+    # M29F002BB/BT и M29F400BB/BT, а серия M28F - старые 12-вольтовые
+    # (M28F512/010/020/102). Mitsubishi 4-Мбит boot-block (M5M29F400) тоже не
+    # подтверждается ни одним найденным даташитом. Держим отказ с объяснением,
+    # а не «значения по умолчанию как у Am29F016»: те дали бы неверную
+    # ёмкость и однородную карту.
+    "M28F002": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                    ambiguous=True, size=256 << 10, volts=5,
+                    src="имя M28F002 даташитом не подтверждено: у ST 2 Мбит "
+                        "boot-block называется M29F002BT/BB. Укажите --chip "
+                        "M29F002BT или M29F002BB"),
+    "M28F004": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                    ambiguous=True, size=512 << 10, volts=5,
+                    src="имя M28F004 даташитом не подтверждено: у ST 4 Мбит "
+                        "boot-block называется M29F400BT/BB. Укажите --chip "
+                        "M29F400BT или M29F400BB"),
+    "M5M29F400": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                      ambiguous=True, size=512 << 10, volts=5,
+                      src="имя M5M29F400 даташитом не подтверждено: у "
+                          "Mitsubishi подтверждены только M5M29F010/M5M29F020. "
+                          "Укажите --chip с проверенным именем"),
     # --- Atmel ---
     "AT29C010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      size=128 << 10, volts=5, bypass=True,
@@ -2970,10 +3040,6 @@ GEOMETRY = {
     "M5M29F020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                       size=256 << 10, volts=5, bypass=True,
                       src="Mitsubishi M5M29F020: 256 KiB, 5 В, аналог Am29F020"),
-    "M5M29F400": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
-                     size=512 << 10, volts=5,
-                     src="4 Мбит: раскладка boot-секторов зависит от ревизии - "
-                         "уточните по даташиту и укажите --sector"),
     # --- NEC ---
     "D28F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                     size=128 << 10, volts=12, src="NEC D28F010: 128 KiB, Vpp 12 В (по умолчанию)"),
@@ -3045,12 +3111,15 @@ def check_sector_map(geo, strict=False):
                 "противоречат друг другу, работать нельзя.")
         return geo
     if geo.get("ambiguous"):
+        hint = geo.get("src") or geo.get("notes") or ""
         raise DirectError(
             "микросхема " + str(name) + ": ревизия не указана, а у boot-чипов "
             "от неё зависит раскладка секторов (16K + 2x8K + 32K + 64K...). "
             "Укажите точное имя ключом --chip (например Am29F800BB для "
             "bottom-boot или Am29F800BT для top-boot): иначе первое же "
-            "стирание заденет соседние данные.")
+            "стирание заденет соседние данные."
+            + ((" Что известно про это имя: " + hint.rstrip(".") + ".")
+               if hint else ""))
     if strict and (not pairs or not size):
         raise DirectError(
             "микросхема " + str(name) + ": неизвестна карта секторов (нет ни "

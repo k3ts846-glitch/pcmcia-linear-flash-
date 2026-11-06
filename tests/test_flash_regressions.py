@@ -276,7 +276,7 @@ check("без CFI код 0xD6 даёт top-boot карту (мелкие сек�
       str((geo_bt_id["name"], D2.sector_map(geo_bt_id)[-1:])))
 
 
-# --- 7. Пакет src/pcmcia_flash: те же правила, чистая логика -------------------
+# --- 8. Пакет src/pcmcia_flash: те же правила, чистая логика -------------------
 section("src/pcmcia_flash: CFI, автоопределение, таблица микросхем")
 
 from pcmcia_flash import chips as C                                 # noqa: E402
@@ -370,6 +370,71 @@ check("в таблице нет выдуманных «производител�
       not any(n in C.CHIP_GEOMETRY for n in
               ("ToshibaTC58", "SamsungNAND", "HitachiHN28F", "NECuPD",
                "SharpLH", "STMicro", "MitsubishiM5M")))
+
+
+# --- 7. Fujitsu MBM29F002/004 и ST M29F002/M29F400: раскладки из даташитов ---
+# Fujitsu DS05-20868-3E: «One 16K byte, two 8K bytes, one 32K byte, and three
+# 64K bytes», «T = Top sector, B = Bottom sector». 4-Мбит ревизии - тот же ряд
+# блоков, что у AMD Am29F004B («...and seven 64 Kbyte sectors»). ST M29F400B:
+# «11 memory blocks - 1 Boot Block, 2 Parameter and 8 Main Blocks», коды
+# 00D5h (top) и 00D6h (bottom) при вендоре 0020h.
+section("Fujitsu и ST: карты boot-блоков по даташитам")
+
+NEW_MAPS = {
+    "MBM29F002BC": (256 << 10, [(16384, 1), (8192, 2), (32768, 1), (65536, 3)]),
+    "MBM29F002TC": (256 << 10, [(65536, 3), (32768, 1), (8192, 2), (16384, 1)]),
+    "MBM29F004BC": (512 << 10, [(16384, 1), (8192, 2), (32768, 1), (65536, 7)]),
+    "MBM29F004TC": (512 << 10, [(65536, 7), (32768, 1), (8192, 2), (16384, 1)]),
+    "M29F002BB": (256 << 10, [(16384, 1), (8192, 2), (32768, 1), (65536, 3)]),
+    "M29F002BT": (256 << 10, [(65536, 3), (32768, 1), (8192, 2), (16384, 1)]),
+    "M29F400BB": (512 << 10, [(16384, 1), (8192, 2), (32768, 1), (65536, 7)]),
+    "M29F400BT": (512 << 10, [(65536, 7), (32768, 1), (8192, 2), (16384, 1)]),
+}
+bad = []
+for name, (size, want) in NEW_MAPS.items():
+    geo_both = []
+    for where, table in (("монолит", D.GEOMETRY), ("пакет", C.CHIP_GEOMETRY)):
+        geo = table.get(name)
+        if not geo:
+            bad.append("%s: нет в %s" % (name, where))
+            continue
+        if geo["size"] != size or C.sector_map(geo) != want:
+            bad.append("%s: %s size=%s map=%s" % (name, where, geo["size"],
+                                                  C.sector_map(geo)))
+        geo_both.append(geo)
+    if len(geo_both) == 2:
+        C.check_sector_map(geo_both[1])          # карта сходится с ёмкостью
+check("8 новых boot-ревизий (Fujitsu + ST) есть в обеих таблицах и совпадают",
+      not bad, str(bad[:3]))
+
+check("ST: вендор 20h, коды 00D5h/00D6h -> M29F400BT/BB "
+      "(не путать с AMD 01h:D5h = Am29F080)",
+      D.vendor_part(0x20, 0xD5) == ("M29F400BT", 4)
+      and D.vendor_part(0x20, 0xD6) == ("M29F400BB", 4)
+      and D.vendor_part(0x01, 0xD5) == ("Am29F080", 8),
+      str((D.vendor_part(0x20, 0xD5), D.vendor_part(0x01, 0xD5))))
+
+# Имена, которых нет в даташитах, должны ОТКАЗЫВАТЬ, а не подставлять
+# умолчания Am29F016 (те дали бы 2 МиБ и однородную карту).
+for name in ("M28F002", "M28F004", "M5M29F400", "MBM29F002", "MBM29F004"):
+    try:
+        D.check_sector_map(D.geometry_for(name))
+        check("%s: отказ с подсказкой, а не умолчания" % name, False)
+    except D.DirectError as exc:
+        msg = str(exc)
+        check("%s: отказ с подсказкой, а не умолчания" % name,
+              "ревизи" in msg and "Укажите" in msg, msg[:70])
+
+# Стирание на модели: у MBM29F002BC первый сектор 16 КиБ, а у TC - 16 КиБ
+# ПОСЛЕДНИЙ; проверяем, что стирается именно он.
+for name, off, size in (("MBM29F002BC", 0x00000, 16 << 10),
+                         ("MBM29F002TC", 0x3C000, 16 << 10)):
+    card, _bus, flash = NM.make(kit=KIT, chips=1, chip_name=name, blank=False)
+    img = bytes((i * 11 + 5) & 0xFF for i in range(256 << 10))
+    card.mem[0][:] = img
+    ok, why = flash.erase_sector(off + 3)
+    check("%s: 16-КиБ boot-сектор стирается по адресу %#x" % (name, off),
+          ok and flash.read(off, size) == b"\xff" * size, why)
 
 
 # Две реализации должны говорить об одном и том же: пакет и монолит -

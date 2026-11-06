@@ -110,9 +110,11 @@ def check_sector_map(geo: dict) -> dict:
     size = int(geo.get("size") or 0)
     name = geo.get("name") or "микросхема"
     if not pairs or not size:
+        hint = geo.get("notes") or geo.get("src") or ""
         raise UnsupportedChip(
             f"{name}: неизвестна карта секторов (нет ни размера сектора, "
             f"ни списка секторов). Укажите модель ключом --chip."
+            + (f" Что известно: {hint.rstrip('.')}." if hint else "")
         )
     total = sum(s * c for s, c in pairs)
     if total != size:
