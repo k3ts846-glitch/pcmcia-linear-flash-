@@ -16,6 +16,7 @@ from .addressing import chip_abs, chip_local, chip_of
 from .constants import (
     AMD_BUFFER_CONFIRM, AMD_BUFFER_SETUP, AMD_READ_CFI, AMD_READ_ID, AMD_RESET,
     DQ5, DQ7, FLASH_POLLS, INTEL_BUFFER_CONFIRM, INTEL_BUFFER_SETUP,
+    INTEL_BUFFER_SIZE,
     INTEL_CUI_CLEAR_SR, INTEL_CUI_ERASE_CONFIRM, INTEL_CUI_ERASE_SETUP,
     INTEL_CUI_READ_ID, INTEL_CUI_READ_SR, INTEL_CUI_RESET, INTEL_CUI_SUSPEND,
     INTEL_CUI_WRITE_SETUP, INTEL_READ_CFI, INTEL_READ_ID, INTEL_RESET,
@@ -495,7 +496,8 @@ class NorFlashProgramming:
         data - то, что должно оказаться в карте; 0xFF означает «не трогать»
         (в NOR запись умеет только 1 -> 0, а стёртое состояние и есть 0xFF).
         Если page=1, работает обычная побайтовая запись.
-        У Intel 28F/StrataFlash с page > 1 используется буферная запись 25h/D0h.
+        У Intel 28F/StrataFlash с page > 1 используется буферная запись
+        E8h/N/D0h (Intel CUI), у AMD StrataFlash — 25h/D0h (JEDEC).
         """
         if len(data) > self.page_card:
             return False, f"за один раз не больше {self.page_card} байт"
@@ -555,19 +557,22 @@ class NorFlashProgramming:
         return bytes(page)
 
     def _program_page_intel(self, card_off, data):
-        """StrataFlash буферная запись: 25h setup, данные, D0h confirm, опрос SR.
+        """Буферная запись Intel CUI: E8h, счётчик N, данные, D0h, опрос SR.
 
-        Последовательность (по даташиту 28F016S5 / M28F016S5):
-          1. Записать 25h в адрес буфера каждого чипа (Write-to-Buffer Setup)
-          2. Записать данные в буфер каждого чипа (по байту на чип за такт)
-          3. Записать D0h в адрес буфера каждого чипа (Buffer Write Confirm)
-          4. Опросить статусный регистр (70h) каждого чипа до WSMS=1
-          5. Сбросить каждый чип (FFh)
+        Последовательность (даташиты Intel 28F/StrataFlash, «Write to Buffer»):
+          1. E8h по адресу буфера каждого чипа (Write-to-Buffer, слово)
+          2. N = число байт минус один — тоже слово
+          3. N+1 слово данных; младший байт - чип 0, старший - чип 1
+          4. D0h (Write Confirm) — после него начинается программирование
+          5. Опросить статусный регистр (70h) каждого чипа до WSRS=1
+          6. Сбросить каждый чип (FFh)
 
-        Каждый чип имеет свой буфер. В 16-битном режиме с 2 чипами:
-        карт-байт start+i*chips+chip → чип chip, смещение i внутри чипа.
-        page_card = page * chips байт на карте, page байт на чип.
+        Раньше здесь были 25h и побайтовые данные: 25h - команда AMD, счётчика
+        не было, а байтовые записи CUI не принимает (он ждёт слово).
         """
+        if self.page > INTEL_BUFFER_SIZE:
+            return False, (f"буфер записи Intel не больше {INTEL_BUFFER_SIZE} байт, "
+                           f"а в таблице page={self.page}")
         start = card_off - (card_off % self.page_card)
         if card_off != start or len(data) != self.page_card:
             return self.program_page(start, self._pad_page(start, data, card_off))
@@ -577,24 +582,26 @@ class NorFlashProgramming:
             if b != 0xFF and self.read_byte(start + i) != 0xFF:
                 return False, f"байт {start + i:#x} не стёрт"
 
-        # 1. 25h Setup — посылаем в каждый чип по адресу буфера (смещение 0 внутри чипа)
-        for chip in range(self.chips):
-            self._intel_send(chip, INTEL_BUFFER_SETUP, 0)
+        # 1. E8h Write-to-Buffer — в каждый чип по адресу буфера
+        # Команда Intel - СЛОВО, и оно одно на всю пару чипов: писать её
+        # «каждому чипу» нельзя - второй такой же байт чип прочтёт как
+        # счётчик N (проверено моделью).
+        self._intel_send(0, INTEL_BUFFER_SETUP, 0)
 
-        # 2. Пишем данные в буфер каждого чипа
-        # data лежит в порядке карты: start+0, start+1, start+2, ...
-        # chip 0 получает data[0], data[2], data[4]... (чётные)
-        # chip 1 получает data[1], data[3], data[5]... (нечётные)
+        # 2. Счётчик N = число байт минус один, словом (младший байт - N)
+        count = self.page - 1
+        self.bus.wr_many(chip_abs(0, 0, self.chips), bytes([count, 0]))
+
+        # 3. Данные — словом: чип 0 в младшем байте, чип 1 в старшем
         for i in range(self.page):
+            word = bytearray(2)
             for chip in range(self.chips):
                 byte_idx = i * self.chips + chip
-                val = data[byte_idx] if byte_idx < len(data) else 0xFF
-                addr = chip_abs(i, chip, self.chips)
-                self.bus.wr(addr, val)
+                word[chip] = data[byte_idx] if byte_idx < len(data) else 0xFF
+            self.bus.wr_many(chip_abs(i, 0, self.chips), bytes(word))
 
-        # 3. D0h Confirm — посылаем в каждый чип
-        for chip in range(self.chips):
-            self._intel_send(chip, INTEL_BUFFER_CONFIRM, 0)
+        # 4. D0h Confirm — посылаем в каждый чип
+        self._intel_send(0, INTEL_BUFFER_CONFIRM, 0)   # тоже одно слово
 
         # 4. Ожидание готовности через статусный регистр каждого чипа
         for chip in range(self.chips):

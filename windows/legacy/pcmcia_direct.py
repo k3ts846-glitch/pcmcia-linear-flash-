@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.8"          # версия набора: печатается в отчёте и в --selftest
+KIT_VERSION = "2.17.9"          # версия набора: печатается в отчёте и в --selftest
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -2575,7 +2575,10 @@ INTEL_CUI_SUSPEND = 0xB0
 # StrataFlash буферная запись (28F016S5, M28F016S5):
 # 25h — Write-to-Buffer Setup, D0h — Buffer Write Confirm.
 # Буфер 32 слова (64 байта на чип в 16-битном режиме, 32 байта в 8-битном).
-INTEL_BUFFER_SETUP = 0x25
+# Intel CUI: Write to Buffer = E8h, затем СЧЁТЧИК N (число байт/слов минус
+# один) и D0h. Прежнее 25h - команда AMD StrataFlash (JEDEC), в CUI Intel её
+# нет: даташиты Intel 28F/StrataFlash дают именно E8h + N + D0h.
+INTEL_BUFFER_SETUP = 0xE8
 INTEL_BUFFER_CONFIRM = 0xD0
 INTEL_BUFFER_SIZE = 32  # слов на чип = 32 байта на чип
 # AMD/Fujitsu StrataFlash буферная запись (Am29PL/DL/GL, MBM29DL/GL):
@@ -4373,7 +4376,8 @@ class NorFlashProgramming:
         data - то, что должно оказаться в карте; 0xFF означает «не трогать»
         (в NOR запись умеет только 1 -> 0, а стёртое состояние и есть 0xFF).
         Если page=1, работает обычная побайтовая запись.
-        У Intel 28F/StrataFlash с page > 1 используется буферная запись 25h/D0h.
+        У Intel 28F/StrataFlash с page > 1 используется буферная запись
+        E8h/N/D0h (Intel CUI), у AMD StrataFlash — 25h/D0h (JEDEC).
         """
         if len(data) > self.page_card:
             return False, f"за один раз не больше {self.page_card} байт"
@@ -4433,19 +4437,24 @@ class NorFlashProgramming:
         return bytes(page)
 
     def _program_page_intel(self, card_off, data):
-        """StrataFlash буферная запись: 25h setup, данные, D0h confirm, опрос SR.
+        """Буферная запись Intel CUI: E8h, счётчик N, данные, D0h, опрос SR.
 
-        Последовательность (по даташиту 28F016S5 / M28F016S5):
-          1. Записать 25h в адрес буфера каждого чипа (Write-to-Buffer Setup)
-          2. Записать данные в буфер каждого чипа (по байту на чип за такт)
-          3. Записать D0h в адрес буфера каждого чипа (Buffer Write Confirm)
-          4. Опросить статусный регистр (70h) каждого чипа до WSMS=1
-          5. Сбросить каждый чип (FFh)
+        Последовательность (даташиты Intel 28F/StrataFlash, «Write to Buffer»):
+          1. E8h по адресу буфера каждого чипа (Write-to-Buffer, слово)
+          2. N = число байт минус один (N=0 -> один байт) — тоже слово
+          3. N+1 слово данных; младший байт слова - чип 0, старший - чип 1
+          4. D0h (Write Confirm) — после него начинается программирование
+          5. Опросить статусный регистр (70h) каждого чипа до WSRS=1
+          6. Сбросить каждый чип (FFh)
 
-        Каждый чип имеет свой буфер. В 16-битном режиме с 2 чипами:
-        карт-байт start+i*chips+chip → чип chip, смещение i внутри чипа.
-        page_card = page * chips байт на карте, page байт на чип.
+        Раньше здесь были 25h и побайтовые данные: 25h - это команда AMD
+        StrataFlash, а не Intel CUI, счётчика не было вовсе, а байтовые записи
+        чип в CUI не принимает (он ждёт слово). Путь не был виден только
+        потому, что у всех Intel-строк таблицы page=1.
         """
+        if self.page > INTEL_BUFFER_SIZE:
+            return False, (f"буфер записи Intel не больше {INTEL_BUFFER_SIZE} байт, "
+                           f"а в таблице page={self.page}")
         start = card_off - (card_off % self.page_card)
         if card_off != start or len(data) != self.page_card:
             return self.program_page(start, self._pad_page(start, data, card_off))
@@ -4455,26 +4464,30 @@ class NorFlashProgramming:
             if b != 0xFF and self.read_byte(start + i) != 0xFF:
                 return False, f"байт {start + i:#x} не стёрт"
 
-        # 1. 25h Setup — посылаем в каждый чип по адресу буфера (смещение 0 внутри чипа)
-        for chip in range(self.chips):
-            self._intel_send(chip, INTEL_BUFFER_SETUP, 0)
+        # 1. E8h Write-to-Buffer — в каждый чип по адресу буфера
+        # Команда Intel - СЛОВО, и оно одно на всю пару чипов: писать её
+        # «каждому чипу» нельзя - второй такой же байт чип прочтёт как
+        # счётчик N (проверено моделью).
+        self._intel_send(0, INTEL_BUFFER_SETUP, 0)
 
-        # 2. Пишем данные в буфер каждого чипа
-        # data лежит в порядке карты: start+0, start+1, start+2, ...
-        # chip 0 получает data[0], data[2], data[4]... (чётные)
-        # chip 1 получает data[1], data[3], data[5]... (нечётные)
+        # 2. Счётчик N = число байт минус один. Пишем СЛОВОМ: младший байт -
+        #    N, старший - 0 (в словесном режиме счётчик занимает DQ3-DQ0).
+        count = self.page - 1
+        self.bus.wr_many(chip_abs(0, 0, self.chips), bytes([count, 0]))
+
+        # 3. Данные — тоже СЛОВОМ: чип 0 в младшем байте, чип 1 в старшем.
+        #    data лежит в порядке карты: start+i*chips+chip.
         for i in range(self.page):
+            word = bytearray(2)
             for chip in range(self.chips):
                 byte_idx = i * self.chips + chip
-                val = data[byte_idx] if byte_idx < len(data) else 0xFF
-                addr = chip_abs(i, chip, self.chips)
-                self.bus.wr(addr, val)
+                word[chip] = data[byte_idx] if byte_idx < len(data) else 0xFF
+            self.bus.wr_many(chip_abs(i, 0, self.chips), bytes(word))
 
-        # 3. D0h Confirm — посылаем в каждый чип
-        for chip in range(self.chips):
-            self._intel_send(chip, INTEL_BUFFER_CONFIRM, 0)
+        # 4. D0h Confirm — посылаем в каждый чип
+        self._intel_send(0, INTEL_BUFFER_CONFIRM, 0)   # тоже одно слово
 
-        # 4. Ожидание готовности через статусный регистр каждого чипа
+        # 5. Ожидание готовности через статусный регистр каждого чипа
         for chip in range(self.chips):
             addr = chip_abs(0, chip, self.chips)
             for _ in range(self.polls):
@@ -4487,7 +4500,7 @@ class NorFlashProgramming:
             else:
                 return False, f"чип {chip}, буфер {start:#x}: не дождались готовности за отведённое время"
 
-        # 5. Проверяем записанные данные
+        # 6. Проверяем записанные данные
         for i, b in enumerate(data):
             if b == 0xFF:
                 continue

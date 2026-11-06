@@ -44,7 +44,8 @@ INTEL_CUI_ALT_WRITE = 0x10
 INTEL_CUI_SUSPEND = 0xB0
 
 # --- буферная запись Intel StrataFlash (25h / D0h) --------------------------
-INTEL_BUFFER_SETUP = 0x25
+# Intel CUI: Write to Buffer = E8h + счётчик N + D0h (25h - это AMD)
+INTEL_BUFFER_SETUP = 0xE8
 INTEL_BUFFER_CONFIRM = 0xD0
 INTEL_BUFFER_SIZE = 32     # слов на чип = 32 байта на чип
 

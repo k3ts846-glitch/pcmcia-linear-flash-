@@ -330,6 +330,36 @@ class ModelCardState:
             st["sr"] = d.SR_READY
             st["mode"] = "sr"
             return
+        if cmd == "buffer_cmd":
+            # Второй такт: N - число записываемых байт минус один (N=0 -> 1)
+            st["buf_left"] = (word & 0xFF) + 1
+            st["buf_data"] = []
+            st["cmd"] = "buffer_data"
+            return
+        if cmd == "buffer_data":
+            if st["buf_left"] > 0:
+                st["buf_data"].append((local, word))
+                st["buf_left"] -= 1
+                if st["buf_left"] == 0:
+                    st["cmd"] = "buffer_confirm"
+                return
+        if cmd == "buffer_confirm":
+            st["cmd"] = None
+            if word != W(d.INTEL_BUFFER_CONFIRM):
+                # Даташит: любой другой байт вместо D0h отменяет буфер
+                st["sr"] = d.SR_READY | d.SR_WRITE_FAIL
+                st["mode"] = "sr"
+                return
+            for off, w in st["buf_data"]:
+                if off in self.refuse_program:
+                    self.fail_off = off
+                    continue
+                self.mem[0][off] &= w & 0xFF
+                if self.chips > 1:
+                    self.mem[1][off] &= (w >> 8) & 0xFF
+            st["sr"] = d.SR_READY
+            st["mode"] = "sr"
+            return
         if cmd == "erase":
             st["cmd"] = None
             if word != W(d.INTEL_CUI_ERASE_CONFIRM):
@@ -376,6 +406,13 @@ class ModelCardState:
         if word in (W(d.INTEL_CUI_WRITE_SETUP), W(d.INTEL_CUI_ALT_WRITE)):
             st["cmd"] = "write"
             return
+        if word == W(d.INTEL_BUFFER_SETUP):
+            # E8h: Write to Buffer (даташит Intel, «Write to Buffer»)
+            st["cmd"] = "buffer_cmd"
+            return
+        # Неизвестная команда: настоящая микросхема её игнорирует, а модель
+        # считает - так старый протокол 25h (AMD) становится видимым в тесте.
+        self.bad_cui_cmds += 1
         st["cmd"] = None
 
     def _mode_hook(self, local, val):
@@ -523,6 +560,7 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
         self.reads = self.writes = self.erases = 0
         self.cmds = []
         self.bad_wide_cmds = 0       # команды, поданные не словом
+        self.bad_cui_cmds = 0        # неизвестные команды в Intel CUI (например 25h)
         self._dq7_polls_left = 0     # счётчик отложенных чтений с DQ7=1 после D0h
 
     def _id_values(self):

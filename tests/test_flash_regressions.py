@@ -900,6 +900,55 @@ for where, table in (("монолит", D.GEOMETRY), ("пакет", C.CHIP_GEOME
 check("Am29LV033C: 4 МиБ, 3 В, 64 x 64 КиБ, без Unlock Bypass", not bad, str(bad))
 
 
+# --- 16. Intel CUI: буферная запись - E8h + счётчик N + D0h, а не 25h ------
+# Даташиты Intel (28F/StrataFlash, «Write to Buffer»): команда E8h по адресу
+# блока, затем N = число байт минус один, затем N+1 слово данных, затем D0h.
+# В коде стояло 25h (это команда AMD StrataFlash, JEDEC), счётчика не было, а
+# данные писались побайтно - тогда как CUI принимает только СЛОВО. Заметить
+# это было нельзя: у всех Intel-строк таблицы page=1, и ветка не работала.
+section("Intel CUI: буферная запись E8h/N/D0h")
+
+from pcmcia_flash import constants as K                                # noqa: E402
+
+check("команда Write-to-Buffer у Intel - E8h (а не 25h из AMD)",
+      K.INTEL_BUFFER_SETUP == 0xE8 and D.INTEL_BUFFER_SETUP == 0xE8,
+      "%#x/%#x" % (K.INTEL_BUFFER_SETUP, D.INTEL_BUFFER_SETUP))
+
+CARD, _bus16, FL16 = NM.make(kit=KIT, chips=1, chip_name="28F016S5", blank=True)
+FL16.page, FL16.page_card = 32, 32
+DATA32 = bytes((i * 37 + 11) & 0xFF for i in range(32))
+ok, why = FL16.program_page(0, DATA32)
+check("буфер 32 байта: программа прошла по E8h и данные читаются",
+      ok and all(FL16.read_byte(i) == DATA32[i] for i in range(32)), why[:80])
+check("модель не увидела ни одной неизвестной команды CUI",
+      CARD.bad_cui_cmds == 0, str(CARD.bad_cui_cmds))
+
+# Пара чипов: команда - ОДНО слово на пару. Если послать E8h «каждому чипу»,
+# второй байт чип прочтёт как счётчик N и буфер уедет - именно эта ошибка
+# была в первой редакции правки.
+CARD2C, _b2c, FL2C = NM.make(kit=KIT, chips=2, chip_name="28F016S5", blank=True)
+FL2C.page, FL2C.page_card = 32, 64
+D64 = bytes((i * 53 + 7) & 0xFF for i in range(64))
+ok, why = FL2C.program_page(0, D64)
+check("пара чипов: E8h одним словом, данные сходятся",
+      ok and all(FL2C.read_byte(i) == D64[i] for i in range(64))
+      and CARD2C.bad_cui_cmds == 0, why[:80])
+
+# Старый протокол: 25h в CUI - неизвестная команда. Модель это фиксирует,
+# значит следующий раз такой код не пройдёт молча.
+CARD2, BUS2, _f2 = NM.make(kit=KIT, chips=1, chip_name="28F016S5", blank=True)
+BUS2.wr_many(CARD2.win_start, bytes([0x25, 0x25]))
+check("старый протокол 25h: модель считает команду неизвестной",
+      CARD2.bad_cui_cmds == 1, str(CARD2.bad_cui_cmds))
+
+# page больше буфера: отказ, а не запись «как получится»
+FL16.page, FL16.page_card = 64, 64
+ok, why = FL16.program_page(0, b"\x00" * 64)
+check("page=64 при буфере 32: отказ с объяснением",
+      (not ok) and "32" in why, why[:70])
+FL16.page, FL16.page_card = 1, 1
+
+
 # Две реализации должны говорить об одном и том же: пакет и монолит -
 # независимые копии, и именно так они разошлись (28F016S5: 128 КиБ против
 # 64 КиБ, дело дошло до ложного отказа blank-check).
