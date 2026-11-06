@@ -690,9 +690,12 @@ check("MX29F1610: прежние 64 КиБ - отказ, сосед назван
 # Строки, которых нет ни в одном из двух источников (flashrom flashchips.h и
 # ядро jedec_probe.c) и под которые не нашлось даташита, обязаны быть помечены
 # честно: чип работает, но отчёт предупреждает, а src говорит, что сверки нет.
+# Am29PL320/640/1280 добавлены в 2.17.6: таких имён нет ни в flashchips.h, ни
+# в jedec_probe.c, то есть строка держалась на догадке.
 UNVERIFIED = {"D28F010", "D28F020", "HN28F010", "HN28F020", "HN28F100",
               "LH28F010", "LH28F020", "M28F008", "M28F016",
-              "M5M29F010", "M5M29F020", "MX29F3210"}
+              "M5M29F010", "M5M29F020", "MX29F3210",
+              "Am29PL320", "Am29PL640", "Am29PL1280"}
 got = {n for n, g in D.GEOMETRY.items() if g.get("unverified")}
 check("помечены «не сверено» ровно %d строк" % len(UNVERIFIED),
       got == UNVERIFIED, str(sorted(got ^ UNVERIFIED)))
@@ -722,6 +725,91 @@ with _ctx.redirect_stdout(_buf):
 check("сверенная строка: ВНИМАНИЯ нет", "ВНИМАНИЕ" not in _buf.getvalue())
 
 
+# --- 13. Четвёртый заход: семейство Am29DL (3,0 В, boot-секторы 8 КиБ) -----
+# Даташит AMD 21534d (Am29DL322D/323D/324D, декабрь 2005): «32 Megabit
+# (4 M x 8-Bit/2 M x 16-Bit) CMOS **3.0 Volt-only**», Table 2 - Bank 1 это
+# восемь секторов по 8 КиБ + семь по 64 КиБ, Table 5 (bottom boot) - SA0..SA7
+# по 8 КиБ, дальше 63 по 64 КиБ, Table 3 (top boot) - зеркально. В таблице
+# стояло «5 В и однородные 64 КиБ»: стёрлось бы 8 КиБ вместо 64 (blank-check
+# упал бы), а напряжение написано в заголовке даташита. Пакет при этом уже
+# знал про 3 В - то есть две реализации расходились, и старая проверка
+# расхождений этого не видела (она сравнивала только ёмкость и карту).
+section("Am29DL: 3,0 В, boot-секторы 8 КиБ, суффикс T/B")
+
+DL_BARE = {"Am29DL322": "T/B", "Am29DL323": "T/B", "Am29DL642": "ревизи",
+           "Am29DL643": "укажите", "MBM29DL322": "BE",
+           "MBM29DL642": "не сверяли"}
+bad = []
+for name, needle in DL_BARE.items():
+    for where, table, err in (("монолит", D.GEOMETRY, D.DirectError),
+                              ("пакет", C.CHIP_GEOMETRY, C.UnsupportedChip)):
+        geo = table.get(name)
+        if not geo:
+            bad.append("%s: нет в %s" % (name, where))
+            continue
+        if geo.get("volts") != 3:
+            bad.append("%s/%s: %s В, а не 3" % (name, where, geo.get("volts")))
+        try:
+            (D.check_sector_map if where == "монолит" else C.check_sector_map)(geo)
+            bad.append("%s/%s: не отказал" % (name, where))
+        except err as exc:
+            if needle not in str(exc):
+                bad.append("%s/%s: в отказе нет «%s»" % (name, where, needle))
+check("Am29DL322/323/642/643, MBM29DL322/642: 3 В и отказ с подсказкой T/B",
+      not bad, str(bad[:3]))
+
+# Конкретные ревизии: карта из Table 5 / Table 3, сумма = ёмкость.
+DL_MAPS = {"Am29DL322DB": [(8192, 8), (65536, 63)],
+           "Am29DL323DB": [(8192, 8), (65536, 63)],
+           "Am29DL324DB": [(8192, 8), (65536, 63)],
+           "MBM29DL322BE": [(8192, 8), (65536, 63)],
+           "Am29DL322DT": [(65536, 63), (8192, 8)],
+           "Am29DL323DT": [(65536, 63), (8192, 8)],
+           "Am29DL324DT": [(65536, 63), (8192, 8)],
+           "MBM29DL322TE": [(65536, 63), (8192, 8)]}
+bad = []
+for name, want in DL_MAPS.items():
+    for where, table in (("монолит", D.GEOMETRY), ("пакет", C.CHIP_GEOMETRY)):
+        geo = table.get(name)
+        if not geo:
+            bad.append("%s: нет в %s" % (name, where))
+        elif geo["size"] != 4 << 20 or C.sector_map(geo) != want \
+                or geo.get("volts") != 3:
+            bad.append("%s/%s: %s %s %sВ" % (name, where, geo["size"],
+                                             C.sector_map(geo), geo.get("volts")))
+check("Am29DL32xDB/DT и MBM29DL322BE/TE: 8x8 КиБ + 63x64 КиБ, 4 МиБ, 3 В",
+      not bad, str(bad[:3]))
+
+# На модели: стирание первого 8-КиБ сектора не трогает соседний 8-КиБ,
+# а «64 КиБ по таблице» на таком чипе ловится стражем.
+card, _bus, flash = NM.make(kit=KIT, chips=1, chip_name="Am29DL322DB", blank=False)
+DL_IMG = bytes((i * 17 + 9) & 0xFF for i in range(4 << 20))
+card.mem[0][:] = DL_IMG
+ok, why = D._erase_sector_guarded(flash, 0x2000)
+check("Am29DL322DB: стёрт второй 8-КиБ сектор, первый цел",
+      ok and flash.read(0x2000, 16) == b"\xff" * 16
+      and flash.read(0x1000, 1) == DL_IMG[0x1000:0x1001], why[:70])
+
+# Обратный случай: таблица БОЛЬШЕ железа (64 КиБ против блока 8 КиБ). Страж
+# соседей тут молчит - он смотрит за границы заявленного сектора, а они целы.
+# Спасает следующий шаг: blank-check увидит, что 0x2000..0xFFFF не стёрлись.
+card, _bus, flash = NM.make(kit=KIT, chips=1, chip_name="Am29DL322DB", blank=False)
+card.mem[0][:] = DL_IMG
+flash.sector = 64 << 10            # прежняя таблица: «первый сектор 64 КиБ»
+flash.sector_map = None
+ok, why = D._erase_sector_guarded(flash, 0)
+check("Am29DL322DB: завышенный сектор страж не ловит (ловит blank-check)",
+      ok and why == ""
+      and set(flash.read(0x2000, 16)) != {0xFF}
+      and flash.read(0, 16) == b"\xff" * 16)
+
+# Сектор SecSi (Table 4) - отдельный, к обычной карте не относится: в карте
+# ровно 71 сектор (8 + 63), SecSi живёт поверх последних 64 КиБ по команде.
+check("Am29DL32xDB: в карте 71 сектор (8 boot + 63), SecSi не в карте",
+      len(C.sector_map(C.CHIP_GEOMETRY["Am29DL322DB"])) == 2
+      and sum(n for _s, n in C.sector_map(C.CHIP_GEOMETRY["Am29DL322DB"])) == 71)
+
+
 # Две реализации должны говорить об одном и том же: пакет и монолит -
 # независимые копии, и именно так они разошлись (28F016S5: 128 КиБ против
 # 64 КиБ, дело дошло до ложного отказа blank-check).
@@ -735,6 +823,21 @@ drift = [(n, C.CHIP_GEOMETRY[n]["size"], D.GEOMETRY[n]["size"],
          or C.sector_map(C.CHIP_GEOMETRY[n]) != D.sector_map(D.GEOMETRY[n])]
 check("ёмкость и карта секторов совпадают у всех %d общих имён" % len(shared),
       bool(shared) and not drift, str(drift[:2]))
+
+# Прошлая проверка смотрела ТОЛЬКО ёмкость и карту, и поэтому пропустила, что
+# Am29DL322 у пакета был 3 В, а у монолита 5 В: чип один, данные разные.
+def _norm(geo):
+    # None у page/bypass - это «нет буфера» и «не поддерживает», а не отличие:
+    # пакет пишет 1/False, монолит оставляет None.
+    return (geo.get("volts"), int(geo.get("page") or 1),
+            bool(geo.get("wide")), bool(geo.get("bypass")))
+
+
+drift2 = [(n, _norm(C.CHIP_GEOMETRY[n]), _norm(D.GEOMETRY[n]))
+          for n in sorted(shared)
+          if _norm(C.CHIP_GEOMETRY[n]) != _norm(D.GEOMETRY[n])]
+check("напряжение, страница, wide и bypass совпадают у всех общих имён",
+      not drift2, str(drift2[:2]))
 
 # Повторяющийся ключ в литерале молча перекрывает предыдущий: 6 таких пар
 # было в GEOMETRY (28F008SA, 28F016SA, 28F016S5, 28F320, M28F102, M28F016S5).

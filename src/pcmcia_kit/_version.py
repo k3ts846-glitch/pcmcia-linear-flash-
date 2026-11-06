@@ -2,4 +2,4 @@
 # -*- coding: utf-8 -*-
 """Единая версия набора PCMCIA FLASH KIT."""
 
-__version__ = "2.17.5"
+__version__ = "2.17.6"

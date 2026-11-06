@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.5"          # версия набора: печатается в отчёте и в --selftest
+KIT_VERSION = "2.17.6"          # версия набора: печатается в отчёте и в --selftest
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -892,6 +892,8 @@ VPP5 = {"Am29F016", "Am29F800", "Am29F400", "Am29F040", "Am29F200", "Am29F010",
         # AMD/Fujitsu StrataFlash — 5 В или 3 В, VPP не нужен
         "Am29PL320", "Am29PL640", "Am29PL1280",
         "Am29DL322", "Am29DL323", "Am29DL642", "Am29DL643",
+        "Am29DL322DB", "Am29DL322DT", "Am29DL323DB", "Am29DL323DT",
+        "Am29DL324DB", "Am29DL324DT", "MBM29DL322BE", "MBM29DL322TE",
         "Am29GL064", "Am29GL128", "Am29GL256", "Am29GL512", "Am29GL1024",
         "MBM29DL322", "MBM29DL642", "MBM29GL064", "MBM29GL128"}
 # Intel Series 2 - это 28F 5-вольтовая серия: запись без 12 В, но у части
@@ -2727,21 +2729,24 @@ GEOMETRY = {
                       src="AMD Am29LV001: ревизия не указана - укажите "
                           "Am29LV001BB или Am29LV001BT"),
     "Am29F016": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=2 << 20, volts=5, bypass=True,
-                     src="AMD Am29F016 (B/D): 32 x 64 КиБ, 5 В. Программи-"
-                         "рование побайтно (A0h, 4 цикла); ускорение - "
-                         "Unlock Bypass 20h (2 цикла на байт)"),
+                     size=2 << 20, volts=5, bypass=False,
+                     src="AMD Am29F016: 32 x 64 КиБ, 5 В, побайтно A0h. Unlock "
+                         "Bypass (20h) появился только в ревизии D (21444E5: "
+                         "«The device now has the Unlock Bypass Program "
+                         "feature»), поэтому по умолчанию не шлём"),
     "Am29F032": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      size=4 << 20, volts=5, bypass=True,
                      src="AMD Am29F032: 64 x 64 КиБ, 5 В. Программи-"
                          "рование побайтно (A0h, 4 цикла); ускорение - "
                          "Unlock Bypass 20h (2 цикла на байт)"),
     "Am29F080": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=1 << 20, volts=5, bypass=True,
-                     src="AMD Am29F080: 128 x 64 КиБ, 5 В. Unlock Bypass 20h"),
+                     size=1 << 20, volts=5, bypass=False,
+                     src="AMD Am29F080: 16 x 64 КиБ, 5 В, побайтно A0h; Unlock "
+                         "Bypass 20h есть не у всех ревизий - по умолчанию не шлём"),
     "Am29F040": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=512 << 10, volts=5, bypass=True,
-                     src="AMD Am29F040: 64 x 64 КиБ, 5 В. Unlock Bypass 20h"),
+                     size=512 << 10, volts=5, bypass=False,
+                     src="AMD Am29F040: 8 x 64 КиБ, 5 В, побайтно A0h; Unlock "
+                         "Bypass 20h есть не у всех ревизий - по умолчанию не шлём"),
     "Am29LV016": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                       size=2 << 20, volts=3, src="AMD Am29LV016: 3 В, 32 x 64 КиБ"),
     "Am29LV800": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
@@ -2956,11 +2961,11 @@ GEOMETRY = {
                        size=256 << 10, volts=3, bypass=True,
                        src="SST SST39VF020: 256 KiB, 64 секторов по 4 КиБ, 2.7-3.6 В (flashrom sst.c: {4 KiB, 64}; SST DS25022A: uniform 4 KByte sectors)"),
     "SST39VF040": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=512 << 10, volts=3, bypass=True,
+                       size=512 << 10, volts=3, bypass=False,
                        src="SST SST39VF040: 512 KiB, 128 секторов по 4 КиБ, 2.7-3.6 В (flashrom sst.c: {4 KiB, 128}; SST DS25022A: uniform 4 KByte sectors)"),
     # 5-вольтовый близнец SST39VF040 (SST DS25022A: uniform 4 KByte sectors).
     "SST39SF040": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=512 << 10, volts=5, bypass=True,
+                       size=512 << 10, volts=5, bypass=False,
                        src="SST SST39SF040: 512 KiB, 128 секторов по 4 КиБ, 5 В "
                            "(SST DS25022A; flashrom sst.c: {4 KiB, 128})"),
     "SST39VF080": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
@@ -3017,27 +3022,78 @@ GEOMETRY = {
                           "(5 В, 32 x 64 КиБ): укажите --chip 28F016S5"),
     # --- AMD/Fujitsu StrataFlash (Am29PL/DL/GL, MBM29DL/GL) ---
     # Буферная запись 25h/D0h, JEDEC-протокол, DQ7/DQ5 опрос, 5 В или 3 В.
+    # Имён Am29PL… нет ни в flashchips.h flashrom, ни в jedec_probe.c ядра:
+    # похоже на «PL» из Spansion S29PL, но это уже другой ряд микросхем.
+    # Данные ниже - не сверенные, и это написано прямо в src.
     "Am29PL320": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                      size=4 << 20, volts=5, bypass=True, strata=True,
-                      src="AMD Am29PL320: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                      size=4 << 20, volts=3, bypass=True, strata=True, unverified=True,
+                      src="Am29PL320: обозначение даташитом не подтверждено (нет ни в "
+                          "flashchips.h, ни в jedec_probe.c); 4 МиБ, буфер 32 байта - "
+                          "по аналогии с DL/GL, не сверено"),
     "Am29PL640": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                      size=8 << 20, volts=5, bypass=True, strata=True,
-                      src="AMD Am29PL640: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                      size=8 << 20, volts=3, bypass=True, strata=True, unverified=True,
+                      src="Am29PL640: обозначение даташитом не подтверждено; 8 МиБ - "
+                          "по аналогии с DL/GL, не сверено"),
     "Am29PL1280": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                       size=16 << 20, volts=5, bypass=True, strata=True,
-                       src="AMD Am29PL1280: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                       size=16 << 20, volts=3, bypass=True, strata=True, unverified=True,
+                       src="Am29PL1280: обозначение даташитом не подтверждено; 16 МиБ - "
+                           "по аналогии с DL/GL, не сверено"),
+    # AMD Am29DL322D/323D/324D (даташит 21534d, декабрь 2005): «32 Megabit
+    # (4 M x 8-Bit/2 M x 16-Bit) CMOS **3.0 Volt-only**, Simultaneous Operation».
+    # Table 2: Bank 1 = восемь секторов по 8 КиБ + семь по 64 КиБ, Bank 2 = 56 по
+    # 64 КиБ. Table 5 (Bottom Boot): SA0..SA7 по 8 КиБ, дальше 63 по 64 КиБ.
+    # Прежняя строка «5 В и однородные 64 КиБ» была неверна дважды: у чипа есть
+    # 8-КиБ boot-секторы, и стирание «первого сектора 64 КиБ» стёрло бы только
+    # 8 КиБ (blank-check упал бы), а напряжение написано 3 В прямо в заголовке.
     "Am29DL322": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                      size=4 << 20, volts=5, bypass=True, strata=True,
-                      src="AMD Am29DL322: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                      size=4 << 20, volts=3, bypass=True, strata=True, ambiguous=True,
+                      why="AMD Am29DL322 без суффикса: раскладка зависит от T/B "
+                          "(bottom 8x8K+63x64K, top наоборот, плюс сектор SecSi "
+                          "64 КиБ); укажите Am29DL322DB/DT - они в таблице",
+                      src="AMD Am29DL322D (21534d), Table 2/5: 3,0 В, boot 8 КиБ"),
     "Am29DL323": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                      size=4 << 20, volts=5, bypass=True, strata=True,
-                      src="AMD Am29DL323: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                      size=4 << 20, volts=3, bypass=True, strata=True, ambiguous=True,
+                      why="AMD Am29DL323 без суффикса: нужен T/B (раскладка одна и "
+                          "та же с 322D, различаются банки); укажите Am29DL323DB/DT",
+                      src="AMD Am29DL323D (21534d), Table 2: 3,0 В, boot 8 КиБ"),
     "Am29DL642": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                      size=8 << 20, volts=5, bypass=True, strata=True,
-                      src="AMD Am29DL642: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                      size=8 << 20, volts=3, bypass=True, strata=True, ambiguous=True,
+                      why="AMD Am29DL642: 64-Мбит двухбанковое семейство с boot-"
+                          "секторами 8 КиБ, однородных 64 КиБ у него нет; даташита "
+                          "этой ревизии под рукой нет - раскладку не сверяли",
+                      src="семейство Am29DL64x, 3,0 В (по аналогии с 21534d)"),
     "Am29DL643": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                      size=8 << 20, volts=5, bypass=True, strata=True,
-                      src="AMD Am29DL643: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                      size=8 << 20, volts=3, bypass=True, strata=True, ambiguous=True,
+                      why="AMD Am29DL643: см. Am29DL642 - 8-КиБ boot-секторы, точная "
+                          "раскладка ревизии не сверена; укажите конкретную часть",
+                      src="семейство Am29DL64x, 3,0 В (по аналогии с 21534d)"),
+    # Конкретные ревизии: карта из Table 5 (bottom) и Table 3 (top) даташита
+    # 21534d. Сумма 8x8K + 63x64K = 4 МиБ, сходится с Table 2.
+    "Am29DL322DB": dict(sector=8 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                        wide=False, volts=3, bypass=True, strata=True,
+                        sectors=[(8 << 10, 8), (64 << 10, 63)],
+                        src="AMD Am29DL322DB (21534d, Table 5): 8x8 КиБ + 63x64 КиБ, 3,0 В"),
+    "Am29DL322DT": dict(sector=64 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                        wide=False, volts=3, bypass=True, strata=True,
+                        sectors=[(64 << 10, 63), (8 << 10, 8)],
+                        src="AMD Am29DL322DT (21534d, Table 3): 63x64 КиБ + 8x8 КиБ, 3,0 В"),
+    "Am29DL323DB": dict(sector=8 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                        wide=False, volts=3, bypass=True, strata=True,
+                        sectors=[(8 << 10, 8), (64 << 10, 63)],
+                        src="AMD Am29DL323DB (21534d, Table 5): раскладка как у 322DB, "
+                            "иное деление на банки"),
+    "Am29DL323DT": dict(sector=64 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                        wide=False, volts=3, bypass=True, strata=True,
+                        sectors=[(64 << 10, 63), (8 << 10, 8)],
+                        src="AMD Am29DL323DT (21534d, Table 3): раскладка как у 322DT"),
+    "Am29DL324DB": dict(sector=8 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                        wide=False, volts=3, bypass=True, strata=True,
+                        sectors=[(8 << 10, 8), (64 << 10, 63)],
+                        src="AMD Am29DL324DB (21534d, Table 5): раскладка как у 322DB"),
+    "Am29DL324DT": dict(sector=64 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                        wide=False, volts=3, bypass=True, strata=True,
+                        sectors=[(64 << 10, 63), (8 << 10, 8)],
+                        src="AMD Am29DL324DT (21534d, Table 3): раскладка как у 322DT"),
     "Am29GL064": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
                       size=8 << 20, volts=3, bypass=True, strata=True,
                       src="AMD Am29GL064: StrataFlash, буфер 32 байта, 25h/D0h, 3 В"),
@@ -3053,12 +3109,26 @@ GEOMETRY = {
     "Am29GL1024": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
                        size=128 << 20, volts=3, bypass=True, strata=True,
                        src="AMD Am29GL1024: StrataFlash, буфер 32 байта, 25h/D0h, 3 В"),
+    # Fujitsu MBM29DL32xTE/BE — «32 M-bit, 3.0 volt-only», копия AMD 21534d;
+    # раскладка та же (8 boot-секторов по 8 КиБ), суффикс BE/TE её и задаёт.
     "MBM29DL322": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                       size=4 << 20, volts=5, bypass=True, strata=True,
-                       src="Fujitsu MBM29DL322: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                       size=4 << 20, volts=3, bypass=True, strata=True, ambiguous=True,
+                       why="Fujitsu MBM29DL322 без суффикса: нужен BE (bottom) или "
+                           "TE (top); укажите MBM29DL322BE/TE",
+                       src="Fujitsu MBM29DL32xTE/BE: 3,0 В, boot 8 КиБ"),
     "MBM29DL642": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                       size=8 << 20, volts=5, bypass=True, strata=True,
-                       src="Fujitsu MBM29DL642: StrataFlash, буфер 32 байта, 25h/D0h, 5 В"),
+                       size=8 << 20, volts=3, bypass=True, strata=True, ambiguous=True,
+                       why="Fujitsu MBM29DL642: 64-Мбит двухбанковое семейство, "
+                           "8-КиБ boot-секторы; раскладку ревизии не сверяли",
+                       src="Fujitsu MBM29DL64x: 3,0 В (по аналогии с MBM29DL32x)"),
+    "MBM29DL322BE": dict(sector=8 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                         wide=False, volts=3, bypass=True, strata=True,
+                         sectors=[(8 << 10, 8), (64 << 10, 63)],
+                         src="Fujitsu MBM29DL322BE (bottom boot): 8x8 КиБ + 63x64 КиБ, 3,0 В"),
+    "MBM29DL322TE": dict(sector=64 << 10, size=4 << 20, page=32, cmd=(0x555, 0x2AA),
+                         wide=False, volts=3, bypass=True, strata=True,
+                         sectors=[(64 << 10, 63), (8 << 10, 8)],
+                         src="Fujitsu MBM29DL322TE (top boot): 63x64 КиБ + 8x8 КиБ, 3,0 В"),
     "MBM29GL064": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
                        size=8 << 20, volts=3, bypass=True, strata=True,
                        src="Fujitsu MBM29GL064: StrataFlash, буфер 32 байта, 25h/D0h, 3 В"),
