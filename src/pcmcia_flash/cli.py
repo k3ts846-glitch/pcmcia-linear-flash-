@@ -28,6 +28,7 @@ from .image import (
     read_card_image, image_report, image_stats, trim_hint,
     normalize_bankwidth, filecmp_equal, card_kind, cis_in_common_mem,
     _read_page, probe, summarize, strings, looks_blank as _lb,
+    cis_card_size, PROBE_LEN,
 )
 from .mem import (
     Mem, mem_for_addr, open_best_mem, read_mem, choose_window,

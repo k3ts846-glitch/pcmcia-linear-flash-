@@ -442,7 +442,7 @@ def read_cis(mem=None, verbose=True):
     (STRICT_DEVMEM, "Operation not permitted") — sysfs (resource0/resource2).
     """
     dev, exca, _wins, bv, bd = _bridge_ctx()
-    from .mem import choose_window, Mem, mem_for_addr, read_mem, open_best_mem, EXCA_BASE, CIS_MAX, setup_cis_window, restore_cis_window, CIS_TAG
+    from .mem import choose_window, Mem, mem_for_addr, read_mem, open_best_mem, EXCA_BASE, CIS_MAX, setup_cis_window, restore_cis_window, CIS_TAG, cardbus_windows
     wins = cardbus_windows()
     win = choose_window(wins, 0)
     pci_addr = win["start"]
