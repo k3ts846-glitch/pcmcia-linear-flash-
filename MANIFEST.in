@@ -1,0 +1,8 @@
+include README.md
+include ИНСТРУКЦИЯ.md
+include MANIFEST.in
+recursive-include windows/legacy *
+recursive-include uploads *
+graft src/pcmcia_flash
+graft src/pcmcia_kit
+graft tests

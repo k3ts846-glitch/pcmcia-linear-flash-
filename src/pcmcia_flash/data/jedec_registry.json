@@ -1,0 +1,38 @@
+{
+  "_comment": "Эталонный реестр JEDEC Device ID. Источники: flashrom flashchips.h, Linux kernel jedec_probe.c, даташиты AMD/Fujitsu/Intel. При изменении чипа в chips.json должен обновиться и этот реестр.",
+  "AMD": {
+    "0x20": { "chip": "Am29F010",   "source": "AMD pub#16736 Rev.G, Device ID = 20H" },
+    "0x22": { "chip": "Am29DL322",  "source": "AMD datasheet, Device ID = 22H" },
+    "0x23": { "chip": "Am29F400AT", "source": "AMD AN943, Device ID = 23H" },
+    "0x3D": { "chip": "Am29F017D",  "source": "Linux kernel jedec_probe.c, AM29F017D 0x003D" },
+    "0x41": { "chip": "Am29F032B",  "source": "Linux kernel jedec_probe.c, AM29F032B 0x0041" },
+    "0x4F": { "chip": "Am29LV040B", "source": "Linux kernel jedec_probe.c, AM29LV040B 0x004F" },
+    "0x51": { "chip": "Am29F200AT", "source": "AMD pub#20637 Rev.A, Device ID = 51H" },
+    "0x57": { "chip": "Am29F200AB", "source": "AMD pub#20637 Rev.A, Device ID = 57H" },
+    "0x58": { "chip": "Am29F800BB", "source": "AMD pub#20375B, Device ID = 58H" },
+    "0x6D": { "chip": "Am29LV001BB","source": "flashrom flashchips.h, AMD_AM29LV001BB 0x6D" },
+    "0xA4": { "chip": "Am29F040",   "source": "AMD pub#17113 Rev.D, Device ID = A4H" },
+    "0xAB": { "chip": "Am29F400AB", "source": "AMD AN943, Device ID = ABH" },
+    "0xAD": { "chip": "Am29F016",   "source": "AMD datasheet, Device ID = ADH" },
+    "0xBA": { "chip": "Am29F080B",  "source": "пользовательский даташот AM29F080B.PDF, Device ID = BAH" },
+    "0xD5": { "chip": "Am29F080",   "source": "flashrom flashchips.h AMD_AM29F080, Device ID = D5H" },
+    "0xD6": { "chip": "Am29F800BT", "source": "AMD pub#20375B, Device ID = D6H" },
+    "0xED": { "chip": "Am29LV001BT","source": "flashrom flashchips.h, AMD_AM29LV001BT 0xED" }
+  },
+  "Fujitsu": {
+    "0xAD": { "chip": "MBM29F016",  "source": "Fujitsu DS05-20807-3E, Device ID = ADH (vendor 04h)" },
+    "0xA4": { "chip": "MBM29F040C", "source": "Fujitsu MBM29F040C, Device ID = A4H (vendor 04h)" }
+  },
+  "Intel": {
+    "0xA1": { "chip": "28F016SA", "source": "Intel datasheet, Device ID = A1H" },
+    "0xA2": { "chip": "28F008SA", "source": "Intel datasheet, Device ID = A2H" },
+    "0xA6": { "chip": "28F016SV", "source": "Intel datasheet, Device ID = A6H" },
+    "0xB5": { "chip": "28F002SA", "source": "Intel datasheet, Device ID = B5H" },
+    "0xB6": { "chip": "28F004SA", "source": "Intel datasheet, Device ID = B6H" }
+  },
+  "manufacturer_ids": {
+    "0x01": "AMD",
+    "0x04": "Fujitsu",
+    "0x89": "Intel"
+  }
+}

@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pytest coverage pytest-cov
+
+      - name: Lint with ruff
+        run: |
+          ruff check pcmcia_direct.py src/ tests/
+
+      - name: Compile check
+        run: |
+          python -m py_compile pcmcia_direct.py src/pcmcia_kit/*.py src/pcmcia_flash/*.py tests/*.py
+
+      - name: Run tests with coverage
+        run: |
+          coverage run --source=pcmcia_direct.py,src -m pytest tests/test_win.py tests/test_scripts.py -v
+
+      - name: Coverage report
+        run: |
+          coverage report --fail-under=80
+          coverage html
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report-${{ matrix.python-version }}
+          path: htmlcov/
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build package
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-packages
+          path: dist/

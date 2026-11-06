@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=PCMCIA Flash Tool
+Comment=Чтение, запись и обслуживание PCMCIA linear flash карт
+Comment[en]=Read, write and service PCMCIA linear flash cards
+Exec=/opt/pcmcia-flash-kit/gui.sh
+Icon=drive-removable-media
+Terminal=false
+Categories=System;Utility;
+Keywords=pcmcia;flash;mtd;cardbus;
