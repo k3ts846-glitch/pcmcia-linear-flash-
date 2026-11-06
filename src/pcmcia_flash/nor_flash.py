@@ -22,7 +22,6 @@ from .constants import (
     INTEL_CUI_WRITE_SETUP, INTEL_READ_CFI, INTEL_READ_ID, INTEL_RESET,
     NOR_BYPASS, NOR_CMD_ADDR1, NOR_CMD_ADDR2, NOR_ERASE_CHIP, NOR_ERASE_RESUME,
     NOR_ERASE_SECTOR, NOR_ERASE_SETUP, NOR_ERASE_SUSPEND, NOR_PROGRAM, NOR_RESET,
-    NOR_SECTOR_PROTECT,
     NOR_UNLOCK1, NOR_UNLOCK2, SR_ERASE_FAIL, SR_PROTECT, SR_READY, SR_SUSPEND,
     SR_VPP_LOW, SR_WRITE_FAIL,
     SECTOR,
@@ -251,10 +250,11 @@ class NorFlashIO:
     def reset(self):
         """Вернуть чипы в режим чтения массива."""
         if self.protocol == "intel":
+            # Через _intel_send: ровно по байту на чип. Прежние два байта
+            # подряд на карте с ОДНИМ чипом означали «команда + данные».
             for chip in range(self.chips):
                 try:
-                    self.bus.wr_many(chip_abs(0, chip, self.chips),
-                                     bytes([INTEL_CUI_RESET, INTEL_CUI_RESET]))
+                    self._intel_send(chip, INTEL_CUI_RESET)
                 except (DirectError, OSError, ValueError):
                     pass
             return
@@ -282,39 +282,56 @@ class NorFlashIO:
         self._bypass_active = True
 
     def exit_bypass(self):
-        """Выйти из режима Unlock Bypass: сброс чипов в чтение массива.
+        """Выйти из Unlock Bypass: 90h + 00h, затем F0h.
 
-        Вызывается безусловно в конце записи, чтобы следующая операция
-        (чтение, стирание, другая запись) начиналась из чистого состояния.
+        Даташит AMD (Am29LV320D, S29AS016J): «During the unlock bypass mode, only
+        the Unlock Bypass Program and Unlock Bypass Reset commands are valid», а
+        Unlock Bypass Reset - это ДВА цикла: 90h, затем 00h (у части Spansion
+        второй цикл F0h). Прежний код посылал только F0h: если чип его в bypass
+        игнорирует, карта остаётся в bypass, и следующая разблокировка AA/55
+        уходит в никуда (в bypass эти циклы уже не разблокировка).
         """
+        if self.protocol == "jedec" and self._bypass_active:
+            for chip in range(self.chips):
+                try:
+                    base = chip_abs(0, chip, self.chips)
+                    self.bus.wr(base, AMD_READ_ID)     # 90h: цикл 1
+                    self.bus.wr(base, 0x00)            # цикл 2
+                except (DirectError, OSError, ValueError):
+                    pass
         self.reset()
         self._bypass_active = False
-
-
 class NorFlashStatus:
     """Статус, идентификатор, защита секторов, приостановка стирания."""
 
     def read_sector_protection(self):
-        """Чтение состояния защиты групп секторов (команда A6h).
+        """Состояние защиты групп секторов: autoselect 90h + адрес (SGA+02h).
 
-        Am29F016D и новее: 8 групп по 4 сектора (32 сектора всего).
-        После разблокировки и команды A6h чтение по адресу группы возвращает
-        DQ0=1, если группа защищена.
+        Даташит Am29F016B/D (21444E): защита проверяется не отдельной командой,
+        а обычным autoselect: AAh@0x555, 55h@0x2AA, 90h@0x555, затем чтение по
+        адресу (SGA + 02h), где группу секторов выбирают биты A20-A18, а данные
+        01h = защищена, 00h = нет.
 
-        Возвращает dict: номер группы -> True (защищена) / False (не защищена),
-        либо None если команда не поддерживается микросхемой.
+        Прежний код посылал команду A6h и «выбирал группу битом A6» (адрес
+        grp << 6). Такой команды у AMD нет: чип её игнорирует, чтение попадает
+        в массив, и функция выдавала случайные «защищено/не защищено».
+
+        Возвращает dict: номер группы -> True (защищена) / False / None.
         """
         if self.protocol != "jedec":
             return None
-        # Sector Group Protect работает только у микросхем с CFI (D-ревизия и новее)
-        # У старых Am29F016/016B команды A6h нет — возвращаем None.
+        sector_chip = max(self.sector // max(self.chips, 1), 1)
+        group_size = sector_chip * 4          # в группе 4 сектора (A20-A18)
+        chip_size = (int(getattr(self.bus, "limit", 0) or 0)
+                     // max(self.chips, 1))
+        groups_n = (chip_size // group_size) if chip_size else 8
+        groups_n = max(min(groups_n, 8), 1)
         self.unlock()
-        self._send(self.cmd1, NOR_SECTOR_PROTECT)
-        # Читаем состояние всех 8 групп: адрес группы смещён на 6 бит
-        # (A6 кодирует номер группы: группа 0 = адрес 0x000, группа 1 = 0x040, ...)
+        self._send(self.cmd1, AMD_READ_ID)     # 90h: режим autoselect
         groups = {}
-        for grp in range(8):
-            addr = grp << 6   # бит A6 = номер группы
+        for grp in range(groups_n):
+            # SGA + 02h: A20-A18 = номер группы, A1 = 1, A0 = 0
+            addr = grp * group_size + 0x02
             try:
                 val = self.read_byte(chip_abs(addr, 0, self.chips))
                 groups[grp] = bool(val & 0x01)
@@ -322,7 +339,6 @@ class NorFlashStatus:
                 groups[grp] = None
         self.reset()
         return groups
-
     def erase_suspend(self):
         """Приостановка стирания (команда B0h).
 
@@ -645,6 +661,14 @@ class NorFlashProgramming:
         if self.page > INTEL_BUFFER_SIZE:
             return False, (f"буфер записи Intel не больше {INTEL_BUFFER_SIZE} байт, "
                            f"а в таблице page={self.page}")
+        if not self.wide:
+            # Счётчик N и данные в E8h идут СЛОВОМ (младший байт - чип 0,
+            # старший - чип 1). На байтовой (x8) микросхеме тот же код означал
+            # бы «команда + данные» и буфер не набрался бы, а отчитался бы он
+            # об успехе. Честнее отказаться, чем писать наугад.
+            return False, ("буферная запись Intel E8h: счётчик и данные идут "
+                           "словом, поэтому нужна 16-битная (x16) микросхема; "
+                           f"{self.name or 'чип'} байтовый (x8)")
         start = card_off - (card_off % self.page_card)
         if card_off != start or len(data) != self.page_card:
             return self.program_page(start, self._pad_page(start, data, card_off))
@@ -654,15 +678,23 @@ class NorFlashProgramming:
             if b != 0xFF and self.read_byte(start + i) != 0xFF:
                 return False, f"байт {start + i:#x} не стёрт"
 
+        # Адрес БЛОКА (BA), а не 0: даташит Intel 28F320J5/J3 велит писать E8h,
+        # счётчик N и D0h по адресу блока; иначе операция прерывается («The
+        # device aborts the Write to Buffer command if the current address is
+        # outside of the original block address»).
+        block_card = self.span(start)[0]
+        local_block = chip_local(block_card, self.chips)
+
         # 1. E8h Write-to-Buffer — в каждый чип по адресу буфера
         # Команда Intel - СЛОВО, и оно одно на всю пару чипов: писать её
         # «каждому чипу» нельзя - второй такой же байт чип прочтёт как
         # счётчик N (проверено моделью).
-        self._intel_send(0, INTEL_BUFFER_SETUP, 0)
+        self._intel_send(0, INTEL_BUFFER_SETUP, local_block)
 
         # 2. Счётчик N = число байт минус один, словом (младший байт - N)
         count = self.page - 1
-        self.bus.wr_many(chip_abs(0, 0, self.chips), bytes([count, 0])[:max(self.chips, 1)])
+        self.bus.wr_many(chip_abs(local_block, 0, self.chips),
+                         bytes([count, 0])[:max(self.chips, 1)])
 
         # 3. Данные — словом: чип 0 в младшем байте, чип 1 в старшем
         for i in range(self.page):
@@ -674,7 +706,7 @@ class NorFlashProgramming:
                              bytes(word[:max(self.chips, 1)]))
 
         # 4. D0h Confirm — посылаем в каждый чип
-        self._intel_send(0, INTEL_BUFFER_CONFIRM, 0)   # тоже одно слово
+        self._intel_send(0, INTEL_BUFFER_CONFIRM, local_block)
 
         # 4. Ожидание готовности через статусный регистр каждого чипа
         for chip in range(self.chips):
@@ -704,64 +736,70 @@ class NorFlashProgramming:
         """AMD/Fujitsu StrataFlash буферная запись (Am29PL/DL/GL, MBM29DL/GL).
 
         Протокол JEDEC (разблокировка AA/55, опрос DQ7/DQ5), не Intel CUI.
-        Последовательность (по даташиту Am29PL/DL/GL):
+        Последовательность (AMD MirrorBit 25539a; Am29DL640G; S29GL-P;
+        W29GL256S - таблица «Write to Buffer» / «Program Buffer to Flash»):
           1. Разблокировка: AAh@0x555, 55h@0x2AA
-          2. 25h@адрес_буфера (Write-to-Buffer Setup)
-          3. Данные по байту в адреса буфера каждого чипа
-          4. D0h@адрес_буфера (Buffer Write Confirm)
-          5. Опрос DQ7/DQ5 до готовности
-          6. Сброс F0h
+          2. 25h @ SA (Write-to-Buffer Setup; SA - адрес СЕКТОРА)
+          3. WC = N-1 @ SA (сколько байт загрузим минус один)
+          4. N байт данных по адресам буфера
+          5. 29h @ SA (Program Buffer to Flash - подтверждение)
+          6. Опрос DQ7/DQ5 по последнему загруженному адресу
+          7. Сброс F0h
 
-        Каждый чип имеет свой буфер. В адресах карты с 2 чипами:
-        карт-байт start+i*chips+chip → чип chip, смещение i внутри чипа.
-        page_card = page * chips байт на карте, page байт на чип.
+        Что было не так до 2.17.13: цикл счётчика отсутствовал, а подтверждением
+        служила команда D0h. Даташит: «The CONFIRM command (29h) is expected
+        after exactly n+1 WRITE cycles; any other command at that point aborts
+        the WRITE-to-BUFFER operation» и «The block address in this command must
+        match the block address in the fourth write cycle». То есть без WC и с
+        D0h микросхема отменяла операцию, а набор этого не видел: модель
+        повторяла ту же ошибку.
         """
         start = card_off - (card_off % self.page_card)
         if card_off != start or len(data) != self.page_card:
             return self.program_page(start, self._pad_page(start, data, card_off))
 
-        # Проверяем, что все байты страницы стёрты (0xFF) или уже нужного значения
+        # Проверяем, что все байты страницы стёрты (0xFF)
         for i, b in enumerate(data):
             if b != 0xFF and self.read_byte(start + i) != 0xFF:
                 return False, f"байт {start + i:#x} не стёрт"
 
-        # Если активно Unlock Bypass — выйти из него перед буферной записью:
-        # из состояния bypass последовательность AA/55 не переводит чип в u1/u2,
-        # поэтому unlock() не сработает и 25h Setup не будет принят.
+        # SA - начало СЕКТОРА: 25h, счётчик и 29h идут именно по нему.
+        sector_base, _size = self.span(start)
+
+        # Если активен Unlock Bypass - выйти: в bypass последовательность
+        # AA/55 не переводит чип в u1/u2, и 25h не будет принят.
         if self._bypass_active:
             self.reset()
 
         # 1. Разблокировка: AAh@cmd1, 55h@cmd2
         self.unlock()
 
-        # 2. 25h Setup — посылаем в каждый чип по адресу буфера (смещение 0 внутри чипа)
-        # Адреса карты: start + chip (byte 0 страницы → чип 0, byte 1 → чип 1, ...)
-        # Используем bus.wr напрямую, а не _send, т.к. _send пересчитывает адрес
-        # через chip_abs(local, 0, chips) — неверно для произвольных адресов буфера.
-        for chip in range(self.chips):
-            buf_addr = start + chip
-            self.bus.wr(buf_addr, AMD_BUFFER_SETUP)
+        count = max(self.page - 1, 0)      # WC: число байт минус один, на чип
 
-        # 3. Пишем данные в буфер каждого чипа
-        # data лежит в порядке карты: start+0, start+1, start+2, ...
-        # chip 0 получает data[0], data[2], data[4]... (чётные)
-        # chip 1 получает data[1], data[3], data[5]... (нечётные)
+        for chip in range(self.chips):
+            sa_addr = sector_base + chip
+            # 2. 25h по адресу сектора
+            self.bus.wr(sa_addr, AMD_BUFFER_SETUP)
+            # 3. Счётчик WC по тому же адресу. Без него чип примет за счётчик
+            #    первый байт данных - и буфер уедет (это и было в 2.17.12).
+            self.bus.wr(sa_addr, count)
+
+        # 4. Данные: чип chip получает data[i*chips+chip]
         for i in range(self.page):
             for chip in range(self.chips):
                 byte_idx = i * self.chips + chip
                 val = data[byte_idx] if byte_idx < len(data) else 0xFF
-                addr = start + i * self.chips + chip
-                self.bus.wr(addr, val)
+                self.bus.wr(start + i * self.chips + chip, val)
 
-        # 4. D0h Confirm — посылаем в каждый чип
+        # 5. 29h (Program Buffer to Flash) по адресу сектора
         for chip in range(self.chips):
-            buf_addr = start + chip
-            self.bus.wr(buf_addr, AMD_BUFFER_CONFIRM)
+            self.bus.wr(sector_base + chip, AMD_BUFFER_CONFIRM)
 
-        # 5. Ожидание готовности через DQ7/DQ5 каждого чипа
+        # 6. Готовность: DQ7 опрашивается по ПОСЛЕДНЕМУ загруженному адресу
         for chip in range(self.chips):
-            addr = start + chip
-            last_val = data[(self.page - 1) * self.chips + chip] if self.page * self.chips <= len(data) else 0xFF
+            last_idx = (self.page - 1) * self.chips + chip
+            last_val = data[last_idx] if last_idx < len(data) else 0xFF
+            addr = start + last_idx
             want = last_val & DQ7
             for _ in range(self.polls):
                 st = self.read_byte(addr)
@@ -769,16 +807,17 @@ class NorFlashProgramming:
                     st2 = self.read_byte(addr)
                     if (st2 & DQ7) == want:
                         break
-                    return False, f"чип {chip}, буфер {start:#x}: микросхема не приняла данные (DQ5=1, DQ7 не тот)"
+                    return False, (f"чип {chip}, буфер {start:#x}: микросхема "
+                                   "не приняла данные (DQ5=1, DQ7 не тот)")
                 if (st & DQ7) == want:
                     break
             else:
-                return False, f"чип {chip}, буфер {start:#x}: не дождались готовности за отведённое время"
+                return False, (f"чип {chip}, буфер {start:#x}: не дождались "
+                               "готовности за отведённое время")
 
-        # 6. Сброс F0h — возвращаем чипы в чтение массива
+        # 7. Сброс F0h - возвращаем чипы в чтение массива
         self.reset()
 
-        # 7. Проверяем записанные данные
         for i, b in enumerate(data):
             if b == 0xFF:
                 continue
@@ -843,12 +882,19 @@ class NorFlashProgramming:
         return False, "микросхема не сообщила о готовности за отведённое время"
 
     def _intel_erase(self, card_off):
-        """Стирание блока по командам CUI: 20h (setup), затем D0h (confirm)."""
+        """Стирание блока по командам CUI: 20h (setup), затем D0h (confirm).
+
+        Оба цикла идут ПО АДРЕСУ БЛОКА (BA) - таблица 3 даташита 290429-008.
+        Команда Intel пишется по байту на чип пары, поэтому ОДНА пара циклов
+        доходит до обоих чипов. Прежний цикл «для каждого чипа» посылал вторую
+        пару 20h/D0h уже во время стирания: чип её игнорирует (во время erase
+        он слушает только 70h и B0h), но это лишние циклы и путаница в логах.
+        """
         base, _size = self.span(card_off)
+        local = chip_local(base, self.chips)
+        self._intel_send(0, INTEL_CUI_ERASE_SETUP, local)
+        self._intel_send(0, INTEL_CUI_ERASE_CONFIRM, local)
         for chip in range(self.chips):
-            local = chip_local(base, self.chips)
-            self._intel_send(chip, INTEL_CUI_ERASE_SETUP, local)
-            self._intel_send(chip, INTEL_CUI_ERASE_CONFIRM, local)
             addr = chip_abs(0, chip, self.chips)
             for _ in range(self.polls):
                 st, why = self._status_ok(addr)

@@ -914,22 +914,24 @@ check("команда Write-to-Buffer у Intel - E8h (а не 25h из AMD)",
       K.INTEL_BUFFER_SETUP == 0xE8 and D.INTEL_BUFFER_SETUP == 0xE8,
       "%#x/%#x" % (K.INTEL_BUFFER_SETUP, D.INTEL_BUFFER_SETUP))
 
+# Счётчик N и данные в E8h идут СЛОВОМ, поэтому буфер имеет смысл только на
+# 16-битной карте: на байтовой (x8) микросхеме код честно отказывает, а не
+# пишет «команду + данные» (подробнее - §20, даташиты 28F320J5 / AP-646).
 CARD, _bus16, FL16 = NM.make(kit=KIT, chips=1, chip_name="28F016S5", blank=True)
 FL16.page, FL16.page_card = 32, 32
 DATA32 = bytes((i * 37 + 11) & 0xFF for i in range(32))
 ok, why = FL16.program_page(0, DATA32)
-check("буфер 32 байта: программа прошла по E8h и данные читаются",
-      ok and all(FL16.read_byte(i) == DATA32[i] for i in range(32)), why[:80])
-check("модель не увидела ни одной неизвестной команды CUI",
-      CARD.bad_cui_cmds == 0, str(CARD.bad_cui_cmds))
+check("x8: буфер E8h отказывает (счётчик и данные - слово, нужна x16)",
+      not ok and "x16" in why, why[:80])
 
-# Пара чипов: команда - ОДНО слово на пару. Если послать E8h «каждому чипу»,
-# второй байт чип прочтёт как счётчик N и буфер уедет - именно эта ошибка
-# была в первой редакции правки.
+# Пара чипов: карта 16-битная (wide), команда - ОДНО слово на пару. Если послать
+# E8h «каждому чипу», второй байт чип прочтёт как счётчик N и буфер уедет -
+# именно эта ошибка была в первой редакции правки.
 CARD2C, _b2c, FL2C = NM.make(kit=KIT, chips=2, chip_name="28F016S5", blank=True)
+FL2C.wide = True
 FL2C.page, FL2C.page_card = 32, 64
 D64 = bytes((i * 53 + 7) & 0xFF for i in range(64))
-ok, why = FL2C.program_page(0, D64)
+ok2c, why2c = FL2C.program_page(0, D64)
 # Ширина команды: ровно по байту на чип. На карте с одним чипом прежнее
 # bytes([op, op]) превращало команду в команду+данные.
 CARD1, _b1, FL1 = NM.make(kit=KIT, chips=1, chip_name="28F008S5", blank=True)
@@ -940,8 +942,8 @@ ok, why = FL1.erase_sector(0)
 check("один чип: стирание сектора идёт", ok, why[:70])
 
 check("пара чипов: E8h одним словом, данные сходятся",
-      ok and all(FL2C.read_byte(i) == D64[i] for i in range(64))
-      and CARD2C.bad_cui_cmds == 0, why[:80])
+      ok2c and all(FL2C.read_byte(i) == D64[i] for i in range(64))
+      and CARD2C.bad_cui_cmds == 0, why2c[:80])
 
 # Старый протокол: 25h в CUI - неизвестная команда. Модель это фиксирует,
 # значит следующий раз такой код не пройдёт молча.
@@ -1383,6 +1385,159 @@ for path in ("windows/legacy/pcmcia_direct.py", "src/pcmcia_flash/nor_flash.py")
         check("50h/SR.6 в " + path, False, "нет _clear_status_and_reset/50h/SR.6")
     else:
         check("50h и SR.6 в " + path.split("/")[-1], True)
+
+
+# --- 20. Сверка с даташитами: буфер AMD, защита групп, E8h, bypass -----------
+# Раунд 2.17.13. Каждый пункт проверялся по 3-4 документам, потому что ошибки
+# были именно в КОДАХ КОМАНД, а не в тексте:
+# * буфер AMD: 25h -> WC = N-1 -> данные -> 29h (Am29DL640G, S29GL-P,
+#   W29GL256S, AMD MirrorBit 25539a, IS29GL064). В наборе был D0h и не было
+#   счётчика - и модель повторяла ту же ошибку, поэтому проверки были зелёные;
+# * защита групп секторов читается ОБЫЧНЫМ autoselect: 90h и адрес SGA+02h
+#   (Am29F016B/D 21444E, Am29F016 18805-D, MX29F016 PM0590). Команды A6h нет:
+#   «метод A6» в даташитах - это уровень V(ih) на ВЫВОДЕ A6;
+# * Intel E8h/счётчик/D0h адресуются БЛОКОМ (28F320J5, 28F128J3A, AP-646).
+section("буфер AMD: 25h -> WC -> данные -> 29h (4 даташита), а не D0h")
+
+
+def _trace(bus):
+    """Записать все циклы записи шины: [("wr"|"wm", адрес, значение/список)]."""
+    log = []
+    _wr, _wm = bus.wr, bus.wr_many
+    bus.wr = lambda a, v: (log.append(("wr", a, v)), _wr(a, v))[1]
+    bus.wr_many = lambda a, d: (log.append(("wm", a, list(d))), _wm(a, d))[1]
+    return log
+
+
+check("AMD_BUFFER_CONFIRM = 29h в обеих реализациях",
+      D.AMD_BUFFER_CONFIRM == 0x29 and _CONST.AMD_BUFFER_CONFIRM == 0x29,
+      (D.AMD_BUFFER_CONFIRM, _CONST.AMD_BUFFER_CONFIRM))
+
+card_bf, bus_bf, flash_bf = NM.make(kit=KIT, chips=2, chip_name="Am29GL064",
+                                    blank=True)
+log_bf = _trace(bus_bf)
+# Данные специально без байтов 25h/29h/D0h, иначе их не отличить от команд.
+page_bf = bytes(0x80 + (i % 0x40) for i in range(flash_bf.page_card))
+ok_bf, why_bf = flash_bf.program_page(0, page_bf)
+wr_bf = [(a, v) for k, a, v in log_bf if k == "wr"]
+vals_bf = [v for _a, v in wr_bf]
+i25 = next((i for i, (_a, v) in enumerate(wr_bf) if v == 0x25), -1)
+wc_ok = i25 >= 0 and wr_bf[i25 + 1][1] == flash_bf.page - 1 and \
+    wr_bf[i25 + 1][0] == wr_bf[i25][0]
+check("25h, затем счётчик WC = page-1 по тому же адресу",
+      wc_ok, wr_bf[max(i25, 0):i25 + 3])
+i29 = next((i for i, (_a, v) in enumerate(wr_bf) if v == 0x29), -1)
+check("подтверждение - 29h по адресу сектора (SA), а не D0h",
+      i29 > i25 >= 0 and wr_bf[i29][0] % max(flash_bf.chips, 1) == 0
+      and 0xD0 not in vals_bf, (i25, i29))
+check("модель включает strata для Am29GL064 (иначе путь буфера не проверяется)",
+      flash_bf.strata is True, flash_bf.strata)
+check("буферная запись AMD: данные легли, нарушений протокола нет",
+      ok_bf and card_bf.bad_buffer == 0
+      and all(flash_bf.read_byte(i) == page_bf[i] for i in range(len(page_bf))),
+      (why_bf[:70], card_bf.bad_buffer))
+
+# Протокол 2.17.12 (25h -> данные -> D0h, без счётчика) обязан ломаться в
+# модели: без этого следующая такая ошибка снова пройдёт незамеченной.
+card_old, bus_old, flash_old = NM.make(kit=KIT, chips=2, chip_name="Am29GL064",
+                                       blank=True)
+flash_old.unlock()
+for chip in range(flash_old.chips):
+    bus_old.wr(chip, D.AMD_BUFFER_SETUP)              # 25h
+for i in range(flash_old.page):
+    for chip in range(flash_old.chips):
+        bus_old.wr(i * flash_old.chips + chip, 0x11)  # данные без WC
+for chip in range(flash_old.chips):
+    bus_old.wr(chip, 0xD0)                            # «подтверждение» D0h
+check("модель отвергает старый протокол (25h -> данные -> D0h)",
+      card_old.bad_buffer > 0 and flash_old.read_byte(0) == 0xFF,
+      card_old.bad_buffer)
+
+section("защита групп секторов: autoselect 90h + адрес SGA+02h (Am29F016B/D)")
+card_pg, bus_pg, flash_pg = NM.make(kit=KIT, chips=1, chip_name="Am29F016",
+                                    blank=True)
+card_pg.protect_groups[3] = True                      # третья группа защищена
+log_pg = _trace(bus_pg)
+groups_pg = flash_pg.read_sector_protection()
+cmds_pg = [v for e in log_pg if e[0] == "wm" for v in e[2]]
+check("защита читается командой 90h, команды A6h нет",
+      0x90 in cmds_pg and 0xA6 not in cmds_pg, cmds_pg[:4])
+check("группа 3 защищена, остальные нет",
+      groups_pg == {0: False, 1: False, 2: False, 3: True,
+                    4: False, 5: False, 6: False, 7: False}, groups_pg)
+
+section("Intel E8h: адрес БЛОКА (BA), а не 0 (28F320J5 / 28F128J3A / AP-646)")
+bad_src = []
+for path in ("windows/legacy/pcmcia_direct.py", "src/pcmcia_flash/nor_flash.py"):
+    src = (pathlib.Path(KIT) / path).read_text(encoding="utf-8")
+    if not ("INTEL_BUFFER_SETUP, local_block" in src
+            and "INTEL_BUFFER_CONFIRM, local_block" in src
+            and "local_block" in src.split("def _program_page_intel")[1]
+            .split("def ")[0]):
+        bad_src.append(path)
+check("E8h, счётчик и D0h идут по адресу блока в обеих реализациях",
+      not bad_src, bad_src)
+card_x8, _bus_x8, flash_x8 = NM.make(kit=KIT, chips=1, chip_name="28F008SA",
+                                     blank=True)
+flash_x8.page, flash_x8.page_card = 4, 4
+ok_x8, why_x8 = flash_x8.program_page(0, b"\x01\x02\x03\x04")
+check("x8 Intel: буфер E8h честно отказывает (слово = только x16)",
+      not ok_x8 and "x16" in why_x8, why_x8[:70])
+
+section("выход из Unlock Bypass: 90h + 00h, затем F0h (Am29LV320D / S29AS016J)")
+card_by, bus_by, flash_by = NM.make(kit=KIT, chips=2, chip_name="Am29GL064",
+                                    blank=True)
+flash_by.enter_bypass()
+log_by = _trace(bus_by)
+flash_by.exit_bypass()
+seq_by = [e[2] for e in log_by if e[0] == "wr"]
+all_by = [v for e in log_by for v in (e[2] if isinstance(e[2], list) else [e[2]])]
+check("выход: 90h и 00h по каждому чипу, F0h в конце",
+      seq_by[:4] == [0x90, 0x00, 0x90, 0x00] and 0xF0 in all_by,
+      (seq_by[:6], all_by[-4:]))
+_buf_by = _io.StringIO()
+with _ctx.redirect_stdout(_buf_by):
+    ok_after_by, _why_by = flash_by.program_byte(0, 0x5A)
+check("после выхода обычная запись проходит (карта не застряла в bypass)",
+      ok_after_by and flash_by.read_byte(0) == 0x5A, _why_by[:60])
+
+section("Intel CUI: сброс одним байтом FFh и одна пара 20h/D0h на стирание")
+card_i, _bus_i, flash_i = NM.make(kit=KIT, chips=1, chip_name="28F008SA",
+                                  blank=True)
+log_i = []
+_wm_i = card_i.write_many
+
+
+def _spy_i(addr, data):
+    log_i.append(list(data))
+    return _wm_i(addr, data)
+
+
+card_i.write_many = _spy_i
+flash_i.reset()
+check("reset(): ровно один байт FFh на чип (не два подряд)", log_i == [[0xFF]], log_i)
+log_i.clear()
+ok_er, why_er = flash_i.erase_sector(0)
+n20 = sum(1 for d in log_i if d and d[0] == 0x20)
+n_d0 = sum(1 for d in log_i if d and d[0] == 0xD0)
+check("стирание Intel: ОДНА пара 20h/D0h", ok_er and n20 == 1 and n_d0 == 1,
+      (n20, n_d0, why_er[:50]))
+
+card_i2, _bus_i2, flash_i2 = NM.make(kit=KIT, chips=2, chip_name="28F008SA",
+                                     blank=True)
+log_i2 = []
+_wm_i2 = card_i2.write_many
+card_i2.write_many = lambda a, d: (log_i2.append(list(d)), _wm_i2(a, d))[1]
+ok_e2, why_e2 = flash_i2.erase_sector(0)
+n20b = sum(1 for d in log_i2 if d and d[0] == 0x20)
+n_d0b = sum(1 for d in log_i2 if d and d[0] == 0xD0)
+check("стирание Intel на паре чипов: снова одна пара (слово 20h/D0h)",
+      ok_e2 and n20b == 1 and n_d0b == 1, (n20b, n_d0b, why_e2[:50]))
+
+model_src = (pathlib.Path(KIT) / "tests" / "nor_model.py").read_text(encoding="utf-8")
+check("модель чипа требует WC и 29h (иначе проверки выше ничего не доказывают)",
+      "bad_buffer" in model_src and 'buf["left"]' in model_src
+      and "AMD_BUFFER_CONFIRM" in model_src)
 
 
 # --- итог ---------------------------------------------------------------------
