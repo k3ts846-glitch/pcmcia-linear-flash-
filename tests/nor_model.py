@@ -106,7 +106,7 @@ class ModelCardIO:
             cfi = self._cfi_bytes()
             return cfi[local] if local < len(cfi) else 0x00
         if mode == "protect":
-            grp = (local >> 6) & 0x07
+            grp = (local >> 16) & 0x07
             return 0x01 if self.protect_groups[grp] else 0x00
         if mode == "erase_suspended":
             return self.raw(off)
@@ -128,9 +128,11 @@ class ModelCardIO:
 
     def write_many(self, addr, data):
         if self.protocol == "intel":
-            if len(data) == 2:
-                return self._cui_step(addr // self.chips,
-                                      data[0] | (data[1] << 8))
+            # Команда идёт ПО БАЙТУ НА ЧИП: у пары - два байта (слово), у
+            # одиночного чипа - один. Всё остальное - неверная ширина.
+            if len(data) == self.chips:
+                word = data[0] | ((data[1] if len(data) > 1 else data[0]) << 8)
+                return self._cui_step(addr // self.chips, word)
             self.bad_wide_cmds += 1
             return
         if self.state == "prog" and len(data) > 1:
@@ -317,8 +319,16 @@ class ModelCardState:
 
         def W(v):
             return (v & 0xFF) | ((v & 0xFF) << 8)
+        def locked(off):
+            """Блок защищён? У Intel это WPPS=1 (бит 1 статуса)."""
+            return bool(self.protect_groups[(off >> 16) & 0x07])
+
         if cmd == "write":
             st["cmd"] = None
+            if locked(local):
+                st["sr"] = d.SR_READY | d.SR_PROTECT
+                st["mode"] = "sr"
+                return
             if local in self.refuse_program:
                 self.fail_off = local
                 st["sr"] = d.SR_READY | d.SR_WRITE_FAIL
@@ -351,6 +361,11 @@ class ModelCardState:
                 st["mode"] = "sr"
                 return
             for off, w in st["buf_data"]:
+                if locked(off):
+                    st["sr"] = d.SR_READY | d.SR_PROTECT
+                    st["mode"] = "sr"
+                    return
+            for off, w in st["buf_data"]:
                 if off in self.refuse_program:
                     self.fail_off = off
                     continue
@@ -362,6 +377,11 @@ class ModelCardState:
             return
         if cmd == "erase":
             st["cmd"] = None
+            if locked(local):
+                st["sr"] = d.SR_READY | d.SR_PROTECT
+                st["mode"] = "sr"
+                self.erase_fail = True
+                return
             if word != W(d.INTEL_CUI_ERASE_CONFIRM):
                 st["sr"] = d.SR_READY | d.SR_WRITE_FAIL
                 st["mode"] = "sr"

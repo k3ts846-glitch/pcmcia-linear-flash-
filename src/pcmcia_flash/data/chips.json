@@ -821,7 +821,7 @@
       "protocol": "intel",
       "volts": 5,
       "manuf": "Intel",
-      "notes": "4 Mbit, 8 блоков по 64 КиБ, байтовая, 5 В. ID A7h: flashrom (28F004S3/S5/SC)"
+      "notes": "4 Мбит x8, 5 В (290597-005), однородные 64 КиБ"
     },
     "28F008SA": {
       "jedec_id": "0xA2",
@@ -851,7 +851,7 @@
       "protocol": "intel",
       "volts": 5,
       "manuf": "Intel",
-      "notes": "8 Mbit, 16 блоков по 64 КиБ, байтовая, 5 В. ID A6h: ядро Linux jedec_probe.c (I28F008S5), flashrom (28F008S3/S5/SC)"
+      "notes": "8 Мбит x8, 5 В (290597-005), однородные 64 КиБ"
     },
     "28F016SA": {
       "jedec_id": null,
@@ -896,7 +896,7 @@
       "protocol": "intel",
       "volts": 5,
       "manuf": "Intel",
-      "notes": "16 Mbit, 32 блока по 64 КиБ, 5 В (Vpp 5 или 12 В). Даташит Intel «BYTE-WIDE SMART 5 FlashFile MEMORY FAMILY 4, 8, AND 16 MBIT»: «16 Mbit: Thirty-Two Blocks». Микросхема БАЙТОВАЯ — команда пишется байтом. Буфером 25h/D0h не пользуемся: это команда AMD StrataFlash, в CUI Intel её нет; пишем по байту 40h. ID не задан: ядро Linux jedec_probe.c читает A0h, flashrom относит AAh к 28F016S3/S5/SC"
+      "notes": "16 Мбит x8, 5 В (290597-005), однородные 64 КиБ"
     },
     "SST39VF040": {
       "jedec_id": null,

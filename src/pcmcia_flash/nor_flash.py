@@ -23,7 +23,8 @@ from .constants import (
     NOR_BYPASS, NOR_CMD_ADDR1, NOR_CMD_ADDR2, NOR_ERASE_CHIP, NOR_ERASE_RESUME,
     NOR_ERASE_SECTOR, NOR_ERASE_SETUP, NOR_ERASE_SUSPEND, NOR_PROGRAM, NOR_RESET,
     NOR_SECTOR_PROTECT,
-    NOR_UNLOCK1, NOR_UNLOCK2, SR_ERASE_FAIL, SR_READY, SR_VPP_LOW, SR_WRITE_FAIL,
+    NOR_UNLOCK1, NOR_UNLOCK2, SR_ERASE_FAIL, SR_PROTECT, SR_READY, SR_VPP_LOW,
+    SR_WRITE_FAIL,
     SECTOR,
 )
 from .errors import DirectError
@@ -366,12 +367,23 @@ class NorFlashStatus:
             return st, ""
         if not (st & SR_READY):
             return st, ""                      # ещё идёт
+        if st & SR_PROTECT:
+            # Отказ оставляет CUI в режиме статуса: дальше чтение массива
+            # вернуло бы байт статуса. Возвращаем чип в режим массива (FFh).
+            self._intel_send(chip_of(card_off, self.chips), INTEL_CUI_RESET)
+            return st, ("блок защищён (WPPS=1, block lock). У 28F004S5/008S5/016S5 снять "
+                        "программную защиту нельзя: Intel прошивает master "
+                        "lock-bit на заводе (erratum #2, 297796-007), нужны "
+                        "12 В на RP#, а слот их не даёт")
         if st & SR_VPP_LOW:
+            self._intel_send(chip_of(card_off, self.chips), INTEL_CUI_RESET)
             return st, ("нет напряжения программирования (VPPS=1): этой "
                         "микросхеме нужны 12 В на Vpp, а слот их не даёт")
         if st & SR_ERASE_FAIL:
+            self._intel_send(chip_of(card_off, self.chips), INTEL_CUI_RESET)
             return st, "микросхема сообщает: стирание не удалось (ESS=1)"
         if st & SR_WRITE_FAIL:
+            self._intel_send(chip_of(card_off, self.chips), INTEL_CUI_RESET)
             return st, "микросхема сообщает: запись не удалась (BWS=1)"
         return st, ""
 
@@ -590,7 +602,7 @@ class NorFlashProgramming:
 
         # 2. Счётчик N = число байт минус один, словом (младший байт - N)
         count = self.page - 1
-        self.bus.wr_many(chip_abs(0, 0, self.chips), bytes([count, 0]))
+        self.bus.wr_many(chip_abs(0, 0, self.chips), bytes([count, 0])[:max(self.chips, 1)])
 
         # 3. Данные — словом: чип 0 в младшем байте, чип 1 в старшем
         for i in range(self.page):
@@ -598,7 +610,8 @@ class NorFlashProgramming:
             for chip in range(self.chips):
                 byte_idx = i * self.chips + chip
                 word[chip] = data[byte_idx] if byte_idx < len(data) else 0xFF
-            self.bus.wr_many(chip_abs(i, 0, self.chips), bytes(word))
+            self.bus.wr_many(chip_abs(i, 0, self.chips),
+                             bytes(word[:max(self.chips, 1)]))
 
         # 4. D0h Confirm — посылаем в каждый чип
         self._intel_send(0, INTEL_BUFFER_CONFIRM, 0)   # тоже одно слово
@@ -726,7 +739,11 @@ class NorFlashProgramming:
         дублируются в оба байта.
         """
         base = chip_abs(addr_local or 0, chip, self.chips)
-        self.bus.wr_many(base, bytes([op, op]))
+        # Ровно по байту на чип пары: у карты с ДВУМЯ чипами это два байта
+        # (команда доходит до обоих), у карты с ОДНИМ - один байт. Прежнее
+        # bytes([op, op]) на одном чипе давало команду, а следом уже данные
+        # (40h как данные) - запись уезжала в мусор.
+        self.bus.wr_many(base, bytes([op] * max(self.chips, 1)))
         return base
 
     def _intel_word_base(self, card_off):

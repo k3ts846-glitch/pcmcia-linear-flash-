@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.9"          # версия набора: печатается в отчёте и в --selftest
+KIT_VERSION = "2.17.10"          # версия набора: печатается в отчёте и в --selftest
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -2562,6 +2562,10 @@ SR_READY = 0x80
 SR_ERASE_FAIL = 0x20
 SR_WRITE_FAIL = 0x10
 SR_VPP_LOW = 0x08
+# WPPS (бит 1): «device protect» - операция попала в защищённый блок.
+# У 28F004S5/008S5/016S5 (297796-007, erratum #2) мастер-бит блокировки прошит
+# на заводе, поэтому программно защиту не снять: нужны 12 В на RP#.
+SR_PROTECT = 0x02
 # Команды CUI Intel 28F008SA (таблица 9 документа)
 INTEL_CUI_RESET = 0xFF
 INTEL_CUI_READ_ID = 0x90
@@ -3002,10 +3006,10 @@ GEOMETRY = {
     # S5/SC, ядро Linux jedec_probe.c: I28F008S5 = A6h).
     "28F004S5": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=False,
                      size=512 << 10, volts=5, protocol="intel",
-                     src="Intel 28F004S5: байтовая Smart 5, 8 x 64 КиБ, 5 В"),
+                     src="Intel 28F004S5 (4 Мбит, x8, 5 В, даташит 290597-005 + spec update 297796-007): 512 КиБ, однородные секторы 64 КиБ, командой байт"),
     "28F008S5": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=False,
                      size=1 << 20, volts=5, protocol="intel",
-                     src="Intel 28F008S5: байтовая Smart 5, 16 x 64 КиБ, 5 В"),
+                     src="Intel 28F008S5 (8 Мбит, x8, 5 В, даташит 290597-005 + spec update 297796-007): 1024 КиБ, однородные секторы 64 КиБ, командой байт"),
     "28F008SA": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=True,
                      size=1 << 20, volts=12, protocol="intel",
                      src="Intel 28F008SA: CUI, 16 блоков по 64 КиБ, Vpp 12 В"),
@@ -3024,7 +3028,7 @@ GEOMETRY = {
     # Пишем по байту командой 40h - медленнее, зато точно по даташиту.
     "28F016S5": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=False,
                      size=2 << 20, volts=5, protocol="intel",
-                     src="Intel 28F016S5: байтовая Smart 5 FlashFile, CUI, "
+                     src="Intel 28F016S5 (16 Мбит, x8, 5 В, даташит 290597-005 + spec update 297796-007): 2048 КиБ, однородные секторы 64 КиБ, командой байт"
                          "32 x 64 КиБ, 5 В; буфер не используется"),
     # Ревизии 28F320 раскладываются по-разному: у B3T/B - boot-блоки, у J3/J5
     # блоки крупнее 64 КиБ. Общее имя «28F320» ничего не говорит о границах
@@ -4246,12 +4250,23 @@ class NorFlashStatus:
             return st, ""
         if not (st & SR_READY):
             return st, ""                      # ещё идёт
+        if st & SR_PROTECT:
+            # Отказ оставляет CUI в режиме статуса: дальше чтение массива
+            # вернуло бы байт статуса. Возвращаем чип в режим массива (FFh).
+            self._intel_send(chip_of(card_off, self.chips), INTEL_CUI_RESET)
+            return st, ("блок защищён (WPPS=1, block lock). У 28F004S5/008S5/016S5 снять "
+                        "программную защиту нельзя: Intel прошивает master "
+                        "lock-bit на заводе (erratum #2, 297796-007), нужны "
+                        "12 В на RP#, а слот их не даёт")
         if st & SR_VPP_LOW:
+            self._intel_send(chip_of(card_off, self.chips), INTEL_CUI_RESET)
             return st, ("нет напряжения программирования (VPPS=1): этой "
                         "микросхеме нужны 12 В на Vpp, а слот их не даёт")
         if st & SR_ERASE_FAIL:
+            self._intel_send(chip_of(card_off, self.chips), INTEL_CUI_RESET)
             return st, "микросхема сообщает: стирание не удалось (ESS=1)"
         if st & SR_WRITE_FAIL:
+            self._intel_send(chip_of(card_off, self.chips), INTEL_CUI_RESET)
             return st, "микросхема сообщает: запись не удалась (BWS=1)"
         return st, ""
 
@@ -4473,7 +4488,7 @@ class NorFlashProgramming:
         # 2. Счётчик N = число байт минус один. Пишем СЛОВОМ: младший байт -
         #    N, старший - 0 (в словесном режиме счётчик занимает DQ3-DQ0).
         count = self.page - 1
-        self.bus.wr_many(chip_abs(0, 0, self.chips), bytes([count, 0]))
+        self.bus.wr_many(chip_abs(0, 0, self.chips), bytes([count, 0])[:max(self.chips, 1)])
 
         # 3. Данные — тоже СЛОВОМ: чип 0 в младшем байте, чип 1 в старшем.
         #    data лежит в порядке карты: start+i*chips+chip.
@@ -4482,7 +4497,8 @@ class NorFlashProgramming:
             for chip in range(self.chips):
                 byte_idx = i * self.chips + chip
                 word[chip] = data[byte_idx] if byte_idx < len(data) else 0xFF
-            self.bus.wr_many(chip_abs(i, 0, self.chips), bytes(word))
+            self.bus.wr_many(chip_abs(i, 0, self.chips),
+                             bytes(word[:max(self.chips, 1)]))
 
         # 4. D0h Confirm — посылаем в каждый чип
         self._intel_send(0, INTEL_BUFFER_CONFIRM, 0)   # тоже одно слово
@@ -4609,7 +4625,11 @@ class NorFlashProgramming:
         дублируются в оба байта.
         """
         base = chip_abs(addr_local or 0, chip, self.chips)
-        self.bus.wr_many(base, bytes([op, op]))
+        # Ровно по байту на чип пары: у карты с ДВУМЯ чипами это два байта
+        # (команда доходит до обоих), у карты с ОДНИМ - один байт. Прежнее
+        # bytes([op, op]) на одном чипе давало команду, а следом уже данные
+        # (40h как данные) - запись уезжала в мусор.
+        self.bus.wr_many(base, bytes([op] * max(self.chips, 1)))
         return base
 
     def _intel_word_base(self, card_off):

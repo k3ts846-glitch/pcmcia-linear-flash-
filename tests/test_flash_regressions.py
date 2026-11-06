@@ -930,13 +930,22 @@ CARD2C, _b2c, FL2C = NM.make(kit=KIT, chips=2, chip_name="28F016S5", blank=True)
 FL2C.page, FL2C.page_card = 32, 64
 D64 = bytes((i * 53 + 7) & 0xFF for i in range(64))
 ok, why = FL2C.program_page(0, D64)
+# Ширина команды: ровно по байту на чип. На карте с одним чипом прежнее
+# bytes([op, op]) превращало команду в команду+данные.
+CARD1, _b1, FL1 = NM.make(kit=KIT, chips=1, chip_name="28F008S5", blank=True)
+ok, why = FL1.program_byte(0x100, 0x5A)
+check("один чип: запись байта идёт (команда - один байт, не два)",
+      ok and FL1.read_byte(0x100) == 0x5A, why[:70])
+ok, why = FL1.erase_sector(0)
+check("один чип: стирание сектора идёт", ok, why[:70])
+
 check("пара чипов: E8h одним словом, данные сходятся",
       ok and all(FL2C.read_byte(i) == D64[i] for i in range(64))
       and CARD2C.bad_cui_cmds == 0, why[:80])
 
 # Старый протокол: 25h в CUI - неизвестная команда. Модель это фиксирует,
 # значит следующий раз такой код не пройдёт молча.
-CARD2, BUS2, _f2 = NM.make(kit=KIT, chips=1, chip_name="28F016S5", blank=True)
+CARD2, BUS2, _f2 = NM.make(kit=KIT, chips=2, chip_name="28F016S5", blank=True)
 BUS2.wr_many(CARD2.win_start, bytes([0x25, 0x25]))
 check("старый протокол 25h: модель считает команду неизвестной",
       CARD2.bad_cui_cmds == 1, str(CARD2.bad_cui_cmds))
@@ -947,6 +956,59 @@ ok, why = FL16.program_page(0, b"\x00" * 64)
 check("page=64 при буфере 32: отказ с объяснением",
       (not ok) and "32" in why, why[:70])
 FL16.page, FL16.page_card = 1, 1
+
+
+# --- 17. Intel 28F004S5/008S5/016S5: spec update 297796-007 ---------------
+# Присланный документ (Intel 297796-007, февраль 1999) — Specification Update к
+# даташиту 290597-005 «5 Volt FlashFile Memory; 28F004S5, 28F008S5, 28F016S5».
+# Из него важны две вещи:
+#   * семейство — 4/8/16 Мбит, x8, 5 В (плотности и ширина шины в таблице верны);
+#   * erratum #2 «Block Locking and Unlocking»: на 8- и 16-Мбит частях Intel
+#     прошивает master lock-bit на заводе, и программно защиту снять НЕЛЬЗЯ -
+#     нужны 12 В на RP#. Обратная сторона: операция в защищённый блок
+#     возвращает WPPS=1 (бит 1 статуса), а наш код этот бит не различал и
+#     писал просто «запись не удалась».
+section("28Fxxx: блок защищён (WPPS) — и почему это не лечится программно")
+
+check("SR_PROTECT = 0x02 в обеих реализациях", K.SR_PROTECT == 0x02
+      and D.SR_PROTECT == 0x02, "%#x/%#x" % (K.SR_PROTECT, D.SR_PROTECT))
+
+LOCK_CARD, _lb, LOCK_FL = NM.make(kit=KIT, chips=1, chip_name="28F008S5", blank=True)
+LOCK_CARD.protect_groups[0] = True          # первый 64-КиБ блок защищён
+ok, why = LOCK_FL.program_byte(0, 0x00)
+check("запись в защищённый блок: отказ объясняет 12 В на RP#",
+      (not ok) and "защищ" in why and "RP#" in why and "297796" in why, why[:90])
+ok, why = LOCK_FL.erase_sector(0)
+check("стирание защищённого блока: то же объяснение",
+      (not ok) and "защищ" in why and "RP#" in why, why[:90])
+# Соседний незащищённый блок при этом работает - защита не «вся карта»
+ok, why = LOCK_FL.program_byte(64 << 10, 0x00)
+check("незащищённый блок пишется нормально", ok, why[:70])
+
+# Две реализации не должны разойтись в диагностике: текст один и тот же.
+_srcs = {}
+for where, rel in (("монолит", ("windows", "legacy", "pcmcia_direct.py")),
+                   ("пакет", ("src", "pcmcia_flash", "nor_flash.py"))):
+    text = pathlib.Path(KIT, *rel).read_text(encoding="utf-8")
+    # в исходнике строка разбита переносом, поэтому ищем короткие куски
+    _srcs[where] = "lock-bit" in text and "RP#" in text and "297796" in text
+check("оба файла знают про master lock-bit и RP#", all(_srcs.values()), str(_srcs))
+
+# Плотности из того же документа: 4/8/16 Мбит, x8, 5 В.
+DENS = {"28F004S5": 512 << 10, "28F008S5": 1 << 20, "28F016S5": 2 << 20}
+bad = []
+for name, size in DENS.items():
+    for where, table in (("монолит", D.GEOMETRY), ("пакет", C.CHIP_GEOMETRY)):
+        geo = table.get(name)
+        if not geo:
+            bad.append("%s нет в %s" % (name, where))
+        elif (geo["size"] != size or geo.get("volts") != 5 or geo.get("wide")
+              or C.sector_map(geo) != [(65536, size >> 16)]):
+            bad.append("%s/%s: %s %sВ wide=%s %s" % (name, where, geo["size"],
+                                                     geo.get("volts"), geo.get("wide"),
+                                                     C.sector_map(geo)))
+check("28F004S5/008S5/016S5: 4/8/16 Мбит, 5 В, x8, секторы по 64 КиБ",
+      not bad, str(bad[:3]))
 
 
 # Две реализации должны говорить об одном и том же: пакет и монолит -
