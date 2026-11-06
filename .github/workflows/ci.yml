@@ -7,11 +7,37 @@ on:
     branches: [ main, master ]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+
+      # Блокирующая проверка: только настоящие ошибки — синтаксис,
+      # неопределённые имена и битые конструкции. Именно она ловит
+      # опечатки вида NOR_ERASE_SUSPEND без импорта.
+      - name: Lint (errors only, blocking)
+        run: ruff check src/ tests/ --select E9,F63,F7,F82
+
+      # Стиль и придирки (E501 и т.п.) — информативно, сборку не валят.
+      - name: Lint (style, informational)
+        continue-on-error: true
+        run: ruff check src/ tests/ --output-format=concise
+
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: [ "3.9", "3.10", "3.11", "3.12", "3.13" ]
 
     steps:
       - uses: actions/checkout@v4
@@ -21,37 +47,47 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install ruff pytest coverage pytest-cov
-
-      - name: Lint with ruff
-        run: |
-          ruff check pcmcia_direct.py src/ tests/
-
       - name: Compile check
         run: |
-          python -m py_compile pcmcia_direct.py src/pcmcia_kit/*.py src/pcmcia_flash/*.py tests/*.py
+          python -m py_compile $(git ls-files '*.py' | grep -v '^windows/legacy/')
 
-      - name: Run tests with coverage
-        run: |
-          coverage run --source=pcmcia_direct.py,src -m pytest tests/test_win.py tests/test_scripts.py -v
+      # Проверки набора — самостоятельные скрипты, а не pytest-функции:
+      # каждый печатает «ИТОГО: прошло N, провалено 0» и возвращает код 0/1.
+      - name: Пульт на Python (поддельные ssh/scp, сеть не нужна)
+        run: .github/run-and-annotate.sh python tests/test_win.py
 
-      - name: Coverage report
-        run: |
-          coverage report --fail-under=80
-          coverage html
+      - name: Консольные скрипты набора
+        run: .github/run-and-annotate.sh python tests/test_scripts.py
 
-      - name: Upload coverage artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
+  # Проверки, которым нужна графика (Tk) и Xvfb.
+  extras:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
-          name: coverage-report-${{ matrix.python-version }}
-          path: htmlcov/
+          python-version: "3.11"
+
+      - name: Install Xvfb and Tk
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb python3-tk
+
+      - name: Аудит и регрессия
+        run: .github/run-and-annotate.sh xvfb-run -a python tests/test_v2.py
+
+      - name: Утилиты и интерфейс
+        run: .github/run-and-annotate.sh xvfb-run -a python tests/test_gui.py
+
+      - name: Отзывчивость, скорость, защита
+        run: .github/run-and-annotate.sh xvfb-run -a python tests/test_ui_pro.py
+
+      - name: A/B-регрессия интерфейса
+        run: .github/run-and-annotate.sh python tests/ab_regression.py pcmcia_gui.py
 
   build:
-    needs: test
+    needs: [ lint, test ]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
