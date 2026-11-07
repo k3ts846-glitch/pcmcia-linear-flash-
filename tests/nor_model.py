@@ -101,13 +101,19 @@ class ModelCardIO:
             if not self.answer_id:
                 return self.mem[chip][local]
             manuf, dev = self._id_values()
-            return manuf if local == 0 else (dev if local == 1 else 0x00)
+            if local == 0:
+                return manuf
+            if local == 1:
+                return dev
+            if local & 0x03 == 0x02:
+                # Sector Group Protect Verify: A1=1, A0=0, группу выбирают
+                # биты A20-A18, данные 01h = защищена, 00h = нет (даташит
+                # Am29F016B/D, таблица autoselect).
+                return 0x01 if self.protect_groups[(local >> 18) & 0x07] else 0x00
+            return 0x00
         if mode == "cfi":
             cfi = self._cfi_bytes()
             return cfi[local] if local < len(cfi) else 0x00
-        if mode == "protect":
-            grp = (local >> 16) & 0x07
-            return 0x01 if self.protect_groups[grp] else 0x00
         if mode == "erase_suspended":
             return self.raw(off)
         if getattr(self, "_dq7_polls_left", 0) > 0:
@@ -135,7 +141,7 @@ class ModelCardIO:
                 return self._cui_step(addr // self.chips, word)
             self.bad_wide_cmds += 1
             return
-        if self.state == "prog" and len(data) > 1:
+        if self._st.get(addr % self.chips, "idle") == "prog" and len(data) > 1:
             return self._program_page(addr, bytes(data))
         if not self.wide or len(data) != 2:
             for i, v in enumerate(data):
@@ -196,15 +202,32 @@ class ModelCardState:
         size = self.sector_map[-1][0]
         return max(off - size, 0), size
 
+    @property
+    def state(self):
+        """Состояние последнего затронутого чипа (автомат теперь по чипам)."""
+        return self._st.get(getattr(self, "_last_chip", 0), "idle")
+
+    @state.setter
+    def state(self, value):
+        self._st[self._last_chip] = value
+
     def store(self, off, val, wide=False, chip=None, local=None):
-        """Один байт в шину. chip/local можно задать напрямую (см. write_many)."""
+        """Один байт в шину. chip/local можно задать напрямую (см. write_many).
+
+        Состояние командного автомата ведётся ПО ЧИПАМ: у каждого чипа свой
+        командный регистр, и команда, посланная одному, второго не трогает
+        (Infineon KBA203626; Linux MTD cfi_build_cmd). Общее на карту
+        состояние скрывало целый класс ошибок: данные, ушедшие в чип без
+        команды, «программировались», а 30h без 80h/AAh/55h «стирал».
+        """
         d = self.d
         self.writes += 1
         if chip is None:
             chip, local = off % self.chips, off // self.chips
         if chip >= self.chips or local >= self.chip_size:
             return
-        st = self.state
+        self._last_chip = chip
+        st = self._st.get(chip, "idle")
         if self.protocol == "intel":
             self.bad_wide_cmds += 1
             return
@@ -213,9 +236,10 @@ class ModelCardState:
                 self.fail_off = off
             else:
                 self.mem[chip][local] &= val & 0xFF
-            self.prog_left = getattr(self, "prog_left", 1) - 1
-            if self.prog_left <= 0:
-                self.state = "bypass" if self.bypass else "idle"
+            left = self._prog_left.get(chip, 1) - 1
+            self._prog_left[chip] = left
+            if left <= 0:
+                self._st[chip] = "bypass" if self.bypass else "idle"
             return
         if st == "erase_cmd":
             # Даташит (AMD/MX «Sector Erase Command Sequence», 6 циклов):
@@ -224,7 +248,7 @@ class ModelCardState:
             # Поэтому модель стирает тот сектор, куда реально попал адрес:
             # если код пошлёт 30h в 0x555, сотрётся сектор 0 - ровно как на
             # настоящей карте. Так ошибка в адресе становится видимой в тесте.
-            self.state = "idle"
+            self._st[chip] = "idle"
             if val == d.NOR_ERASE_SECTOR:
                 self.erase_targets.append((chip, local))
                 if self.refuse_erase:
@@ -236,19 +260,32 @@ class ModelCardState:
                 for i in range(base, min(base + chip_sector, self.chip_size)):
                     self.mem[chip][i] = 0xFF
                 self.erases += 1
+            elif val == d.NOR_ERASE_CHIP and local == self.cmd[0]:
+                # Chip Erase - те же 6 циклов, но шестой не 30h по адресу
+                # сектора, а 10h по командному адресу (Am29F016 и др.).
+                # До 2.17.14 модель этого не знала и «chip erase» в ней
+                # ничего не стирал, поэтому и проверять его было нечем.
+                if self.refuse_erase:
+                    self.erase_fail = True
+                elif not self.quiet_erase:
+                    for i in range(self.chip_size):
+                        self.mem[chip][i] = 0xFF
+                    self.erases += 1
             return
         self.cmds.append((local, val))
-        if val in (d.NOR_RESET, d.INTEL_RESET) and st != "buffer_write":
+        if val in (d.NOR_RESET, d.INTEL_RESET) and st != "buffer":
             self._mode = "array"
             self.bypass = False
-            self.state, self.fail_off, self.erase_fail = "idle", None, False
+            self._st.clear()
+            self._prog_left.clear()
+            self.fail_off, self.erase_fail = None, False
             self._dq7_polls_left = 0
             return
         if st == "idle" and local == self.cmd[0] and val == d.NOR_UNLOCK1:
-            self.state = "u1"
+            self._st[chip] = "u1"
             return
         if st == "u1" and local == self.cmd[1] and val == d.NOR_UNLOCK2:
-            self.state = "u2"
+            self._st[chip] = "u2"
             return
         # CFI Query: ОДИН цикл, адрес 55h, данные 98h (без разблокировки).
         if st == "idle" and local == 0x55 and val == d.AMD_READ_CFI:
@@ -261,20 +298,20 @@ class ModelCardState:
                 if not self.supports_bypass:
                     # Микросхема не знает команды 20h: игнорирует её, как
                     # настоящая. Именно так выглядит карта с Am29F016 (без D).
-                    self.state = "idle"
+                    self._st[chip] = "idle"
                     return
                 self.bypass = True
-                self.state = "bypass"
+                self._st[chip] = "bypass"
                 return
             if val == d.NOR_PROGRAM:
-                self.state = "prog"
-                self.prog_left = 2 if self.wide else 1
+                self._st[chip] = "prog"
+                self._prog_left[chip] = 2 if self.wide else 1
                 return
             if val == d.NOR_ERASE_SETUP:
-                self.state = "erase_u1"
+                self._st[chip] = "erase_u1"
                 return
             if val == d.NOR_ERASE_CHIP:
-                self.state = "idle"
+                self._st[chip] = "idle"
                 if self.refuse_erase:
                     self.erase_fail = True
                 elif not self.quiet_erase:
@@ -282,34 +319,74 @@ class ModelCardState:
                         self.mem[chip][i] = 0xFF
                     self.erases += 1
                 return
-            self.state = "idle"
+            self._st[chip] = "idle"
             return
         if st == "u2" and val == d.AMD_BUFFER_SETUP:
-            self.state = "buffer_write"
-            self.buffer_addr = off
-            self.buffer_left = self.page * self.chips
+            # 25h @ SA. Следующий цикл К ЭТОМУ ЖЕ ЧИПУ - счётчик WC = N-1
+            # (даташит AMD: «the number of locations minus one»); буфер у
+            # каждого чипа свой, поэтому состояние ведётся по чипам.
+            st_now = getattr(self, "_buffer", None)
+            if st_now is None:
+                st_now = self._buffer = {"phase": {}, "left": {}, "data": {}}
+            st_now["phase"][chip] = ("count", local)
+            st_now["left"][chip] = 0
+            st_now["data"][chip] = []
+            self._st[chip] = "buffer"
             return
-        if st == "buffer_write":
-            if off == self.buffer_addr and val == d.AMD_BUFFER_CONFIRM:
-                self.state = "idle"
-                self._dq7_polls_left = self.chips * getattr(self, "polls", 100)
-                return
+        if st == "buffer":
+            buf = self._buffer
             if val == d.AMD_BUFFER_SETUP:
+                # Следующий чип пары открывает СВОЙ буфер (у каждого чипа свой
+                # CUI и свой загрузчик буфера) - это не нарушение порядка.
+                buf["phase"][chip] = ("count", local)
+                buf["left"][chip] = 0
+                buf["data"][chip] = []
                 return
-            self.mem[chip][local] &= val & 0xFF
-            self.buffer_left -= 1
+            ph = buf["phase"].get(chip)
+            if ph is None:
+                # Запись чипу, который буфер не открывал: даташит - abort.
+                self.bad_buffer += 1
+                return
+            kind, sa_local = ph
+            if kind == "count":
+                buf["left"][chip] = (val & 0xFF) + 1
+                buf["phase"][chip] = ("data", sa_local)
+                return
+            if val == d.AMD_BUFFER_CONFIRM:
+                # Program Buffer to Flash: только 29h, только по адресу
+                # сектора и ровно после N+1 циклов данных.
+                if local != sa_local or buf["left"].get(chip, 0) != 0:
+                    self.bad_buffer += 1
+                else:
+                    for off_i, local_i, v_i in buf["data"][chip]:
+                        if off_i in self.refuse_program:
+                            self.fail_off = off_i
+                            continue
+                        self.mem[chip][local_i] &= v_i & 0xFF
+                buf["phase"].pop(chip, None)
+                self._st[chip] = "idle"
+                if not buf["phase"]:
+                    self._buffer = None
+                    self._dq7_polls_left = self.chips * getattr(self, "polls", 100)
+                return
+            if buf["left"].get(chip, 0) <= 0:
+                # Данных больше, чем обещал счётчик: abort.
+                self.bad_buffer += 1
+                return
+            buf["data"][chip].append((off, local, val))
+            buf["left"][chip] -= 1
             return
         if st == "bypass" and local == self.cmd[0] and val == d.NOR_PROGRAM:
-            self.state = "prog"
-            self.prog_left = 2 if self.wide else 1
+            self._st[chip] = "prog"
+            self._prog_left[chip] = 2 if self.wide else 1
             return
         if st == "erase_u1" and local == self.cmd[0] and val == d.NOR_UNLOCK1:
-            self.state = "erase_u2"
+            self._st[chip] = "erase_u2"
             return
         if st == "erase_u2" and local == self.cmd[1] and val == d.NOR_UNLOCK2:
-            self.state = "erase_cmd"
+            self._st[chip] = "erase_cmd"
             return
-        self.state = "idle"
+        self._st[chip] = "idle"
 
     def _cui_step(self, local, word):
         d = self.d
@@ -408,7 +485,8 @@ class ModelCardState:
             return
         if word == W(d.INTEL_CUI_RESET):
             st["cmd"], st["mode"] = None, "array"
-            self.state, self.fail_off, self.erase_fail = "idle", None, False
+            self._st.clear()
+            self.fail_off, self.erase_fail = None, False
             return
         if word == W(d.INTEL_CUI_READ_ID):
             st["mode"] = "id"
@@ -445,8 +523,9 @@ class ModelCardState:
             self._mode = "cfi"
         elif val in (d.NOR_RESET, d.INTEL_RESET):
             self._mode = "array"
-        elif val == d.NOR_SECTOR_PROTECT:
-            self._mode = "protect"
+        # 0xA6h команды не существует: у AMD защита группы читается через
+        # autoselect (90h и адрес SGA+02h), а «метод A6» - это уровень
+        # V(ih) на ВЫВОДЕ A6 при высоковольтном программировании.
         elif val == d.NOR_ERASE_SUSPEND:
             self._mode = "erase_suspended"
             self._erase_suspended = True
@@ -494,7 +573,12 @@ class ModelCardProgramming:
     """Симуляция программирования страницы (AMD-режим A0h + данные)."""
 
     def _program_page(self, addr, data):
-        self.state = "idle"
+        # Цикл записи закончен. Чип возвращается туда, откуда пришёл: в режим
+        # Unlock Bypass (он НЕ заканчивается на записи - только по 90h/00h или
+        # сбросу) либо в обычное чтение массива.
+        for ch in list(self._st):
+            if self._st[ch] == "prog":
+                self._st[ch] = "bypass" if self.bypass else "idle"
         for i, v in enumerate(data):
             a = addr + i
             if a in self.refuse_program:
@@ -564,7 +648,9 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
         self.page_size_cfi = page_size_cfi
         self.supports_bypass = supports_bypass   # чип знает команду 20h?
         self.no_cfi = no_cfi                     # чип не отвечает на 98h
-        self.state = "idle"
+        self._st = {}                # состояние команд КАЖДОГО чипа
+        self._prog_left = {}         # сколько байт данных ждёт каждый чип
+        self._last_chip = 0
         self.fail_page = None
         self.protect_groups = [False] * 8   # состояние защиты 8 групп секторов
         self._erase_suspended = False       # стирание приостановлено (B0h)
@@ -581,6 +667,11 @@ class ModelCard(ModelCardIO, ModelCardState, ModelCardProgramming):
         self.cmds = []
         self.bad_wide_cmds = 0       # команды, поданные не словом
         self.bad_cui_cmds = 0        # неизвестные команды в Intel CUI (например 25h)
+        # Нарушения протокола буферной записи AMD: нет цикла счётчика WC,
+        # подтверждение не 29h или не по адресу сектора, данных больше/меньше
+        # обещанного. Даташит: любое из этого отменяет операцию (abort).
+        self.bad_buffer = 0
+        self._buffer = None          # состояние буферной записи AMD (по чипам)
         self._dq7_polls_left = 0     # счётчик отложенных чтений с DQ7=1 после D0h
 
     def _id_values(self):
@@ -726,6 +817,11 @@ def make(kit=None, span=MIB, **kw):
                        cmd=card.cmd, wide=card.wide,
                        page=geo.get("page") or 1,
                        bypass=bool(geo.get("bypass")),
+                       # strata: у AMD/Fujitsu StrataFlash буферная запись идёт
+                       # командами 25h/WC/29h. Без этого флага модель гоняла
+                       # обычную страничную запись A0h и путь буфера не
+                       # проверялся вообще (так ошибка 2.17.12 и прожила).
+                       strata=bool(geo.get("strata")),
                        name=card.chip_name, protocol=card.protocol,
                        sector_map=geo.get("sectors") or None,
                        ro=bool(geo.get("ro")),

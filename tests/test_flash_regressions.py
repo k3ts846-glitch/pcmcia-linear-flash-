@@ -914,22 +914,24 @@ check("команда Write-to-Buffer у Intel - E8h (а не 25h из AMD)",
       K.INTEL_BUFFER_SETUP == 0xE8 and D.INTEL_BUFFER_SETUP == 0xE8,
       "%#x/%#x" % (K.INTEL_BUFFER_SETUP, D.INTEL_BUFFER_SETUP))
 
+# Счётчик N и данные в E8h идут СЛОВОМ, поэтому буфер имеет смысл только на
+# 16-битной карте: на байтовой (x8) микросхеме код честно отказывает, а не
+# пишет «команду + данные» (подробнее - §20, даташиты 28F320J5 / AP-646).
 CARD, _bus16, FL16 = NM.make(kit=KIT, chips=1, chip_name="28F016S5", blank=True)
 FL16.page, FL16.page_card = 32, 32
 DATA32 = bytes((i * 37 + 11) & 0xFF for i in range(32))
 ok, why = FL16.program_page(0, DATA32)
-check("буфер 32 байта: программа прошла по E8h и данные читаются",
-      ok and all(FL16.read_byte(i) == DATA32[i] for i in range(32)), why[:80])
-check("модель не увидела ни одной неизвестной команды CUI",
-      CARD.bad_cui_cmds == 0, str(CARD.bad_cui_cmds))
+check("x8: буфер E8h отказывает (счётчик и данные - слово, нужна x16)",
+      not ok and "x16" in why, why[:80])
 
-# Пара чипов: команда - ОДНО слово на пару. Если послать E8h «каждому чипу»,
-# второй байт чип прочтёт как счётчик N и буфер уедет - именно эта ошибка
-# была в первой редакции правки.
+# Пара чипов: карта 16-битная (wide), команда - ОДНО слово на пару. Если послать
+# E8h «каждому чипу», второй байт чип прочтёт как счётчик N и буфер уедет -
+# именно эта ошибка была в первой редакции правки.
 CARD2C, _b2c, FL2C = NM.make(kit=KIT, chips=2, chip_name="28F016S5", blank=True)
+FL2C.wide = True
 FL2C.page, FL2C.page_card = 32, 64
 D64 = bytes((i * 53 + 7) & 0xFF for i in range(64))
-ok, why = FL2C.program_page(0, D64)
+ok2c, why2c = FL2C.program_page(0, D64)
 # Ширина команды: ровно по байту на чип. На карте с одним чипом прежнее
 # bytes([op, op]) превращало команду в команду+данные.
 CARD1, _b1, FL1 = NM.make(kit=KIT, chips=1, chip_name="28F008S5", blank=True)
@@ -940,8 +942,8 @@ ok, why = FL1.erase_sector(0)
 check("один чип: стирание сектора идёт", ok, why[:70])
 
 check("пара чипов: E8h одним словом, данные сходятся",
-      ok and all(FL2C.read_byte(i) == D64[i] for i in range(64))
-      and CARD2C.bad_cui_cmds == 0, why[:80])
+      ok2c and all(FL2C.read_byte(i) == D64[i] for i in range(64))
+      and CARD2C.bad_cui_cmds == 0, why2c[:80])
 
 # Старый протокол: 25h в CUI - неизвестная команда. Модель это фиксирует,
 # значит следующий раз такой код не пройдёт молча.
@@ -1383,6 +1385,267 @@ for path in ("windows/legacy/pcmcia_direct.py", "src/pcmcia_flash/nor_flash.py")
         check("50h/SR.6 в " + path, False, "нет _clear_status_and_reset/50h/SR.6")
     else:
         check("50h и SR.6 в " + path.split("/")[-1], True)
+
+
+# --- 20. Сверка с даташитами: буфер AMD, защита групп, E8h, bypass -----------
+# Раунд 2.17.13. Каждый пункт проверялся по 3-4 документам, потому что ошибки
+# были именно в КОДАХ КОМАНД, а не в тексте:
+# * буфер AMD: 25h -> WC = N-1 -> данные -> 29h (Am29DL640G, S29GL-P,
+#   W29GL256S, AMD MirrorBit 25539a, IS29GL064). В наборе был D0h и не было
+#   счётчика - и модель повторяла ту же ошибку, поэтому проверки были зелёные;
+# * защита групп секторов читается ОБЫЧНЫМ autoselect: 90h и адрес SGA+02h
+#   (Am29F016B/D 21444E, Am29F016 18805-D, MX29F016 PM0590). Команды A6h нет:
+#   «метод A6» в даташитах - это уровень V(ih) на ВЫВОДЕ A6;
+# * Intel E8h/счётчик/D0h адресуются БЛОКОМ (28F320J5, 28F128J3A, AP-646).
+section("буфер AMD: 25h -> WC -> данные -> 29h (4 даташита), а не D0h")
+
+
+def _trace(bus):
+    """Записать все циклы записи шины: [("wr"|"wm", адрес, значение/список)]."""
+    log = []
+    _wr, _wm = bus.wr, bus.wr_many
+    bus.wr = lambda a, v: (log.append(("wr", a, v)), _wr(a, v))[1]
+    bus.wr_many = lambda a, d: (log.append(("wm", a, list(d))), _wm(a, d))[1]
+    return log
+
+
+check("AMD_BUFFER_CONFIRM = 29h в обеих реализациях",
+      D.AMD_BUFFER_CONFIRM == 0x29 and _CONST.AMD_BUFFER_CONFIRM == 0x29,
+      (D.AMD_BUFFER_CONFIRM, _CONST.AMD_BUFFER_CONFIRM))
+
+card_bf, bus_bf, flash_bf = NM.make(kit=KIT, chips=2, chip_name="Am29GL064",
+                                    blank=True)
+log_bf = _trace(bus_bf)
+# Данные специально без байтов 25h/29h/D0h, иначе их не отличить от команд.
+page_bf = bytes(0x80 + (i % 0x40) for i in range(flash_bf.page_card))
+ok_bf, why_bf = flash_bf.program_page(0, page_bf)
+wr_bf = [(a, v) for k, a, v in log_bf if k == "wr"]
+vals_bf = [v for _a, v in wr_bf]
+i25 = next((i for i, (_a, v) in enumerate(wr_bf) if v == 0x25), -1)
+wc_ok = i25 >= 0 and wr_bf[i25 + 1][1] == flash_bf.page - 1 and \
+    wr_bf[i25 + 1][0] == wr_bf[i25][0]
+check("25h, затем счётчик WC = page-1 по тому же адресу",
+      wc_ok, wr_bf[max(i25, 0):i25 + 3])
+i29 = next((i for i, (_a, v) in enumerate(wr_bf) if v == 0x29), -1)
+check("подтверждение - 29h по адресу сектора (SA), а не D0h",
+      i29 > i25 >= 0 and wr_bf[i29][0] % max(flash_bf.chips, 1) == 0
+      and 0xD0 not in vals_bf, (i25, i29))
+check("модель включает strata для Am29GL064 (иначе путь буфера не проверяется)",
+      flash_bf.strata is True, flash_bf.strata)
+check("буферная запись AMD: данные легли, нарушений протокола нет",
+      ok_bf and card_bf.bad_buffer == 0
+      and all(flash_bf.read_byte(i) == page_bf[i] for i in range(len(page_bf))),
+      (why_bf[:70], card_bf.bad_buffer))
+
+# Протокол 2.17.12 (25h -> данные -> D0h, без счётчика) обязан ломаться в
+# модели: без этого следующая такая ошибка снова пройдёт незамеченной.
+card_old, bus_old, flash_old = NM.make(kit=KIT, chips=2, chip_name="Am29GL064",
+                                       blank=True)
+flash_old.unlock()
+for chip in range(flash_old.chips):
+    bus_old.wr(chip, D.AMD_BUFFER_SETUP)              # 25h
+for i in range(flash_old.page):
+    for chip in range(flash_old.chips):
+        bus_old.wr(i * flash_old.chips + chip, 0x11)  # данные без WC
+for chip in range(flash_old.chips):
+    bus_old.wr(chip, 0xD0)                            # «подтверждение» D0h
+check("модель отвергает старый протокол (25h -> данные -> D0h)",
+      card_old.bad_buffer > 0 and flash_old.read_byte(0) == 0xFF,
+      card_old.bad_buffer)
+
+section("защита групп секторов: autoselect 90h + адрес SGA+02h (Am29F016B/D)")
+card_pg, bus_pg, flash_pg = NM.make(kit=KIT, chips=1, chip_name="Am29F016",
+                                    blank=True)
+card_pg.protect_groups[3] = True                      # третья группа защищена
+log_pg = _trace(bus_pg)
+groups_pg = flash_pg.read_sector_protection()
+cmds_pg = [v for e in log_pg if e[0] == "wm" for v in e[2]]
+check("защита читается командой 90h, команды A6h нет",
+      0x90 in cmds_pg and 0xA6 not in cmds_pg, cmds_pg[:4])
+check("группа 3 защищена, остальные нет",
+      groups_pg == {0: False, 1: False, 2: False, 3: True,
+                    4: False, 5: False, 6: False, 7: False}, groups_pg)
+
+section("Intel E8h: адрес БЛОКА (BA), а не 0 (28F320J5 / 28F128J3A / AP-646)")
+bad_src = []
+for path in ("windows/legacy/pcmcia_direct.py", "src/pcmcia_flash/nor_flash.py"):
+    src = (pathlib.Path(KIT) / path).read_text(encoding="utf-8")
+    if not ("INTEL_BUFFER_SETUP, local_block" in src
+            and "INTEL_BUFFER_CONFIRM, local_block" in src
+            and "local_block" in src.split("def _program_page_intel")[1]
+            .split("def ")[0]):
+        bad_src.append(path)
+check("E8h, счётчик и D0h идут по адресу блока в обеих реализациях",
+      not bad_src, bad_src)
+card_x8, _bus_x8, flash_x8 = NM.make(kit=KIT, chips=1, chip_name="28F008SA",
+                                     blank=True)
+flash_x8.page, flash_x8.page_card = 4, 4
+ok_x8, why_x8 = flash_x8.program_page(0, b"\x01\x02\x03\x04")
+check("x8 Intel: буфер E8h честно отказывает (слово = только x16)",
+      not ok_x8 and "x16" in why_x8, why_x8[:70])
+
+section("выход из Unlock Bypass: 90h + 00h, затем F0h (Am29LV320D / S29AS016J)")
+card_by, bus_by, flash_by = NM.make(kit=KIT, chips=2, chip_name="Am29GL064",
+                                    blank=True)
+flash_by.enter_bypass()
+log_by = _trace(bus_by)
+flash_by.exit_bypass()
+seq_by = [e[2] for e in log_by if e[0] == "wr"]
+all_by = [v for e in log_by for v in (e[2] if isinstance(e[2], list) else [e[2]])]
+check("выход: 90h и 00h по каждому чипу, F0h в конце",
+      seq_by[:4] == [0x90, 0x00, 0x90, 0x00] and 0xF0 in all_by,
+      (seq_by[:6], all_by[-4:]))
+_buf_by = _io.StringIO()
+with _ctx.redirect_stdout(_buf_by):
+    ok_after_by, _why_by = flash_by.program_byte(0, 0x5A)
+check("после выхода обычная запись проходит (карта не застряла в bypass)",
+      ok_after_by and flash_by.read_byte(0) == 0x5A, _why_by[:60])
+
+section("Intel CUI: сброс одним байтом FFh и одна пара 20h/D0h на стирание")
+card_i, _bus_i, flash_i = NM.make(kit=KIT, chips=1, chip_name="28F008SA",
+                                  blank=True)
+log_i = []
+_wm_i = card_i.write_many
+
+
+def _spy_i(addr, data):
+    log_i.append(list(data))
+    return _wm_i(addr, data)
+
+
+card_i.write_many = _spy_i
+flash_i.reset()
+check("reset(): ровно один байт FFh на чип (не два подряд)", log_i == [[0xFF]], log_i)
+log_i.clear()
+ok_er, why_er = flash_i.erase_sector(0)
+n20 = sum(1 for d in log_i if d and d[0] == 0x20)
+n_d0 = sum(1 for d in log_i if d and d[0] == 0xD0)
+check("стирание Intel: ОДНА пара 20h/D0h", ok_er and n20 == 1 and n_d0 == 1,
+      (n20, n_d0, why_er[:50]))
+
+card_i2, _bus_i2, flash_i2 = NM.make(kit=KIT, chips=2, chip_name="28F008SA",
+                                     blank=True)
+log_i2 = []
+_wm_i2 = card_i2.write_many
+card_i2.write_many = lambda a, d: (log_i2.append(list(d)), _wm_i2(a, d))[1]
+ok_e2, why_e2 = flash_i2.erase_sector(0)
+n20b = sum(1 for d in log_i2 if d and d[0] == 0x20)
+n_d0b = sum(1 for d in log_i2 if d and d[0] == 0xD0)
+check("стирание Intel на паре чипов: снова одна пара (слово 20h/D0h)",
+      ok_e2 and n20b == 1 and n_d0b == 1, (n20b, n_d0b, why_e2[:50]))
+
+model_src = (pathlib.Path(KIT) / "tests" / "nor_model.py").read_text(encoding="utf-8")
+check("модель чипа требует WC и 29h (иначе проверки выше ничего не доказывают)",
+      "bad_buffer" in model_src and 'buf["left"]' in model_src
+      and "AMD_BUFFER_CONFIRM" in model_src)
+
+
+# --- 21. Карта из ДВУХ x8-чипов: команда - каждому чипу ----------------------
+# У каждого чипа свой командный регистр, поэтому команда должна дойти до
+# каждого. Как это делается - три независимых источника:
+#   * Infineon KBA203626 «Connecting 2x8-bit Parallel NOR Flash Devices to MCU»:
+#     «commands must be written in parallel to each 1x8 flash device ... flash
+#     command cycles must be duplicated within the 2B word ... one copy in the
+#     low byte and one copy ... in the high byte», и там же: «status reads ...
+#     require special logic ... one device will become ready before the other»;
+#   * Linux MTD drivers/mtd/chips/cfi_util.c, cfi_build_cmd(): байт команды
+#     размножается по всем чипам слова, адрес - cmd_ofs * interleave;
+#   * OpenOCD (dual flash mode): «command byte is sent to both chips but data
+#     bytes are sent alternatingly».
+# Было до 2.17.14: _send() писал два байта только при wide=True, поэтому на
+# паре x8 (wide=False) ВСЕ команды уходили в чип 0, а данные - в оба.
+section("два x8-чипа: команды - каждому чипу, данные - словом")
+
+
+def _trace2(bus):
+    log = []
+    _wr, _wm = bus.wr, bus.wr_many
+    bus.wr = lambda a, v: (log.append((a, [v])), _wr(a, v))[1]
+    bus.wr_many = lambda a, d: (log.append((a, list(d))), _wm(a, d))[1]
+    return log
+
+
+card_p2, bus_p2, flash_p2 = NM.make(kit=KIT, chips=2, chip_name="Am29F016",
+                                    blank=True)
+log_p2 = _trace2(bus_p2)
+ok_p2, why_p2 = flash_p2.program_byte(0x1000, 0x5A)
+cmds_p2 = [(a, d) for a, d in log_p2 if a in (0xAAA, 0x554)]
+check("команды AA/55/A0h уходят ОБОИМ чипам (словом по байту на чип)",
+      ok_p2 and cmds_p2 and all(len(d) == 2 and d[0] == d[1]
+                                for _a, d in cmds_p2),
+      cmds_p2)
+check("данные пишутся словом: свой байт + соседний как есть",
+      flash_p2.read(0x1000, 2) == b"\x5a\xff", flash_p2.read(0x1000, 2).hex())
+
+ok_p2b, why_p2b = flash_p2.program_byte(0x1001, 0xA5)      # НЕЧЁТНЫЙ адрес
+check("нечётный байт (чип 1) программируется, соседний не портится",
+      ok_p2b and flash_p2.read(0x1000, 2) == b"\x5a\xa5",
+      (why_p2b[:60], flash_p2.read(0x1000, 2).hex()))
+
+card_e2, bus_e2, flash_e2 = NM.make(kit=KIT, chips=2, chip_name="Am29F016",
+                                    blank=False)
+log_e2 = _trace2(bus_e2)
+ok_e2, why_e2 = flash_e2.erase_sector(0)
+tgt = sorted(card_e2.erase_targets)
+check("стирание: один цикл 30h словом - сектор стёрт в ОБОИХ чипах",
+      ok_e2 and tgt == [(0, 0), (1, 0)] and card_e2.erases == 2,
+      (why_e2[:50], tgt, card_e2.erases))
+n30 = [d for a, d in log_e2 if d and d[0] == D.NOR_ERASE_SECTOR]
+check("30h послан ОДИН раз (словом), а не по циклу на чип",
+      len(n30) == 1 and len(n30[0]) == 2, n30)
+
+card_ce, _bus_ce, flash_ce = NM.make(kit=KIT, chips=2, chip_name="Am29F016",
+                                     blank=False)
+ok_ce, why_ce = flash_ce.erase_chip()
+check("стирание чипа: стёрты оба чипа", ok_ce and card_ce.erases == 2,
+      (why_ce[:60], card_ce.erases))
+
+# Старый протокол (команды только чипу 0, данные - чипу 1) обязан ЛОМАТЬСЯ в
+# модели: иначе следующая такая ошибка снова пройдёт незамеченной.
+card_old2, bus_old2, flash_old2 = NM.make(kit=KIT, chips=2,
+                                          chip_name="Am29F016", blank=True)
+bus_old2.wr_many(0xAAA, bytes([0xAA]))
+bus_old2.wr_many(0x554, bytes([0x55]))
+bus_old2.wr_many(0xAAA, bytes([0xA0]))
+bus_old2.wr(0x1001, 0x77)
+check("модель: данные без команды чипу НЕ программируются",
+      flash_old2.read(0x1001, 1) == b"\xff", flash_old2.read(0x1001, 1).hex())
+card_old3, bus_old3, flash_old3 = NM.make(kit=KIT, chips=2,
+                                          chip_name="Am29F016", blank=False)
+bus_old3.wr(1, D.NOR_ERASE_SECTOR)         # один 30h, без 80h/AAh/55h
+check("модель: один 30h без 80h/AAh/55h не стирает",
+      card_old3.erases == 0 and flash_old3.read(0, 1) != b"\xff",
+      card_old3.erases)
+
+# Intel: команда CUI действует на карту, поэтому её адрес всегда от чипа 0.
+# Прежний chip_abs(..., chip) для chip=1 писал два байта СО СДВИГОМ: команда
+# чипу 1 и та же команда чипу 0 по другому адресу.
+card_i3, bus_i3, flash_i3 = NM.make(kit=KIT, chips=2, chip_name="28F008SA",
+                                    blank=True)
+log_i3 = _trace2(bus_i3)
+flash_i3._intel_send(1, 0x70)
+addrs_i3 = [a for a, _d in log_i3]
+check("_intel_send для чипа 1 пишет по чётному адресу (без сдвига на байт)",
+      addrs_i3 and all(a % 2 == 0 for a in addrs_i3), addrs_i3)
+
+# Unlock Bypass на паре чипов: сеанс НЕ заканчивается на записи (даташит:
+# выход - 90h/00h или сброс), поэтому второй и третий байты должны пройти без
+# повторной разблокировки.
+card_b2, _bus_b2, flash_b2 = NM.make(kit=KIT, chips=2, chip_name="Am29GL064",
+                                     blank=True)
+_buf_b2 = _io.StringIO()
+with _ctx.redirect_stdout(_buf_b2):
+    b_1 = flash_b2.program_byte(0x1000, 0x11)
+    b_2 = flash_b2.program_byte(0x1001, 0x22)
+    b_3 = flash_b2.program_byte(0x1002, 0x33)
+    flash_b2.exit_bypass()
+check("bypass на паре чипов: сеанс держится между байтами, данные верны",
+      b_1[0] and b_2[0] and b_3[0] and not flash_b2._bypass_broken
+      and flash_b2.read(0x1000, 4) == b"\x11\x22\x33\xff",
+      (b_2[1][:40], flash_b2.read(0x1000, 4).hex()))
+
+st_left = {c: s for c, s in getattr(card_p2, "_st", {}).items() if s != "idle"}
+check("после записи оба чипа вернулись в состояние idle", not st_left, st_left)
 
 
 # --- итог ---------------------------------------------------------------------

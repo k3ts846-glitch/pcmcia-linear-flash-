@@ -18,7 +18,10 @@ NOR_ERASE_SECTOR = 0x30
 NOR_ERASE_CHIP = 0x10
 NOR_UNLOCK1 = 0xAA
 NOR_UNLOCK2 = 0x55
-NOR_SECTOR_PROTECT = 0xA6  # чтение состояния защиты групп секторов (Am29F016D)
+# НЕ команда чипа: у AMD состояние защиты группы секторов читается режимом
+# autoselect (90h) по адресу SGA+02h. Значение 0xA6 в даташитах - это уровень
+# V(ih) на ВЫВОДЕ A6 при высоковольтном методе защиты, а не цикл записи.
+NOR_SECTOR_PROTECT = 0xA6
 NOR_ERASE_SUSPEND = 0xB0   # приостановка стирания (Am29F016D)
 NOR_ERASE_RESUME = 0x30    # продолжение стирания (совместимо с командой сектора)
 
@@ -55,9 +58,13 @@ INTEL_BUFFER_SETUP = 0xE8
 INTEL_BUFFER_CONFIRM = 0xD0
 INTEL_BUFFER_SIZE = 32     # слов на чип = 32 байта на чип
 
-# --- буферная запись AMD / Fujitsu StrataFlash (25h / D0h) -------------------
+# --- буферная запись AMD / Fujitsu StrataFlash (25h / 29h) -------------------
+# 25h — Write-to-Buffer Setup, счётчик WC = N-1, данные, 29h — Program Buffer
+# to Flash. 29h, а не D0h: D0h — подтверждение буфера в Intel CUI (E8h/D0h);
+# у AMD/Spansion иное значение прерывает операцию (даташиты Am29DL640G,
+# S29GL-P, W29GL256S, AMD MirrorBit 25539a).
 AMD_BUFFER_SETUP = 0x25
-AMD_BUFFER_CONFIRM = 0xD0
+AMD_BUFFER_CONFIRM = 0x29
 AMD_BUFFER_SIZE = 32       # слов на чип = 32 байта на чип
 
 # --- общие параметры флеш-памяти ----------------------------------------------
