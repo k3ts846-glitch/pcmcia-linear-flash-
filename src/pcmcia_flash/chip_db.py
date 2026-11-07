@@ -105,6 +105,10 @@ def _build_geometry(chips: dict[str, Any]) -> dict[str, dict[str, Any]]:
             # проверки геометрии. До 2.17.21 это поле не переносилось, поэтому
             # в пакете не могло быть ни одной строки «только чтение».
             "ro": bool(chip.get("ro", False)),
+            # ambiguous - «ревизия не указана» (boot-чипы: у T и B разная
+            # раскладка секторов). Пакет обязан отказать так же, как монолит,
+            # иначе карта с boot-чипом стиралась бы «по 64 КиБ».
+            "ambiguous": bool(chip.get("ambiguous", False)),
         }
         if geometry[name]["ro"] and not geometry[name]["why"]:
             raise DirectError(f"{name}: ro без why - отказ должен быть "

@@ -184,6 +184,13 @@ def _flash_report(parts, extra_lines=()):
              else ", командой байт")
           + (f", страница {geo.get('page')} байт"
              if (geo.get("page") or 1) > 1 else ""))
+    if geo.get("unverified"):
+        # До 2.17.23 поле переносилось из chips.json, но нигде не выводилось:
+        # пакет молчал там, где монолит предупреждает.
+        print("  ВНИМАНИЕ: параметры не сверены с даташитом: "
+              + (geo.get("notes") or geo.get("src") or "источника нет")[:110])
+        print("            первый сектор проверьте на копии карты "
+              "(или укажите --chip с проверенной моделью)")
     if geo.get("autodetect"):
         ad = geo["autodetect"]
         bits = []
