@@ -264,9 +264,13 @@ GEOMETRY = {
                          "данные. Укажите --chip Am29LV800BB или Am29LV800BT",
                      src="AMD Am29LV800BB/Am29LV800BT (даташиты AMD, 3 В, boot- "
                          "block)"),
+    # То же семейство, что MBM29F016A ниже (иногда пишут без «A»). Unlock
+    # Bypass 20h у Fujitsu нашими документами не подтверждён - см. пояснение
+    # к MBM29F016A; раньше здесь стояло bypass=True без ссылки на документ.
     "MBM29F016": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                      size=2 << 20, volts=5, bypass=True,
-                      src="Fujitsu MBM29F016A: 5 В. Unlock Bypass 20h"),
+                      size=2 << 20, volts=5, bypass=False,
+                      src="Fujitsu MBM29F016A (16M (2M x 8) BIT): 32 сектора по "
+                          "64 КиБ, 5.0 V-Only; unlock bypass 20h не подтверждён"),
     # 28F008SA: команда - СЛОВО по 0x5555, сектор 64 КиБ, вся карта стирается
     # только по секторам (chip erase у неё есть, но 10h у Intel - другое)
     # ВНИМАНИЕ про Intel: у 28F команда подаётся по адресу 0x5555 в СЛОВАХ.
@@ -387,9 +391,18 @@ GEOMETRY = {
     # сектор 64 КиБ, побайтовая запись A0h, JEDEC-протокол, 5.0 В).
     # ====================================================================
     # --- Fujitsu ---
+    # Даташит Fujitsu «MBM29F016A» (16M (2M x 8) BIT, 43 стр.): «The 2 M bytes
+    # of data is divided into 32 sectors of 64 K bytes», 5.0 V-Only, ID 04h/ADh.
+    # Unlock Bypass 20h в наших записях по этому документу не подтверждён,
+    # поэтому bypass=False: стандартная запись A0h верна в любом случае, а
+    # выдуманная команда 20h - нет (раньше здесь стояло True «по аналогии с
+    # Am29F016»; у Am29F016 20h подтверждён даташитом AMD 18805, у Fujitsu -
+    # нет).
     "MBM29F016A": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=2 << 20, volts=5, bypass=True,
-                       src="Fujitsu MBM29F016A: 32 x 64 КиБ, 5 В, аналог Am29F016"),
+                       size=2 << 20, volts=5, bypass=False,
+                       src="Fujitsu MBM29F016A (16M (2M x 8) BIT): 32 сектора "
+                           "по 64 КиБ, 5.0 V-Only, ID 04h/ADh; unlock bypass "
+                           "20h даташитом не подтверждён - пишем A0h"),
     "MBM29F033": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                       size=4 << 20, volts=5, bypass=True, unverified=True,
                       src="Fujitsu MBM29F033: имени нет ни в flashchips.h, ни в "
@@ -564,10 +577,12 @@ GEOMETRY = {
                      src="Macronix MX29F040: 4 Мбит (512K x 8), «Sector Erase "
                          "8 equal sectors of 64K-Byte each», 5.0 V only"),
     "MX29F1610": dict(sector=128 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                      size=2 << 20, volts=5, bypass=True,
+                      size=2 << 20, volts=5, bypass=False,
                       src="Macronix MX29F1610: 16 секторов по 128 КиБ, 5 В "
-                          "(даташит: «16 equal sectors of 128k bytes each»); "
-                          "страничная запись 128 байт не используется - пишем по байту"),
+                          "(даташит: «16 equal sectors of 128k bytes each», "
+                          "5V +-10%); в таблице команд Unlock Bypass нет - "
+                          "стирание 80h/30h, запись A0h; страничная запись "
+                          "128 байт не используется - пишем по байту"),
     # 32-Мбит версия того же семейства; даташита под рукой нет, поэтому
     # раскладка взята по аналогии (32 x 128 КиБ) и строка помечена unverified.
     "MX29F3210": dict(sector=128 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
@@ -575,12 +590,18 @@ GEOMETRY = {
                       src="Macronix MX29F3210: 4 МиБ, 5 В; раскладка 32 x 128 КиБ "
                           "взята по аналогии с MX29F1610 - даташитом не сверена"),
     # --- SST ---
+    # SST39VF010/020 (даташит Microchip/SST DS20005023: «Sector-Erase
+    # Capability - Uniform 4 KByte sectors», 2.7-3.6 В, Software Data
+    # Protection). Unlock Bypass 20h у этого семейства нет: запись - три
+    # такта AAh/55h/A0h, стирание - шесть, SDP. Раньше у 010/020/080 стояло
+    # bypass=True (у SST39VF040 при этом False) - команда 20h уходила в никуда,
+    # запись откатывалась на A0h с предупреждением. Теперь False у всех.
     "SST39VF010": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=128 << 10, volts=3, bypass=True,
-                       src="SST SST39VF010: 128 KiB, 32 секторов по 4 КиБ, 2.7-3.6 В (flashrom sst.c: {4 KiB, 32}; SST DS25022A: uniform 4 KByte sectors)"),
+                       size=128 << 10, volts=3, bypass=False,
+                       src="SST SST39VF010 (DS20005023): 1 Mbit, 128 KiB, 32 сектора по 4 КиБ, 2.7-3.6 В, Software Data Protection; unlock bypass 20h нет"),
     "SST39VF020": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=256 << 10, volts=3, bypass=True,
-                       src="SST SST39VF020: 256 KiB, 64 секторов по 4 КиБ, 2.7-3.6 В (flashrom sst.c: {4 KiB, 64}; SST DS25022A: uniform 4 KByte sectors)"),
+                       size=256 << 10, volts=3, bypass=False,
+                       src="SST SST39VF020 (DS20005023): 2 Mbit, 256 KiB, 64 сектора по 4 КиБ, 2.7-3.6 В, Software Data Protection; unlock bypass 20h нет"),
     "SST39VF040": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                        size=512 << 10, volts=3, bypass=False,
                        src="SST SST39VF040: 512 KiB, 128 секторов по 4 КиБ, 2.7-3.6 В (flashrom sst.c: {4 KiB, 128}; SST DS25022A: uniform 4 KByte sectors)"),
@@ -590,8 +611,8 @@ GEOMETRY = {
                        src="SST SST39SF040: 512 KiB, 128 секторов по 4 КиБ, 5 В "
                            "(SST DS25022A; flashrom sst.c: {4 KiB, 128})"),
     "SST39VF080": dict(sector=4 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=1 << 20, volts=3, bypass=True,
-                       src="SST SST39VF080: 1 MiB, 256 секторов по 4 КиБ, 2.7-3.6 В (flashrom sst.c: {4 KiB, 256}; SST DS25022A: uniform 4 KByte sectors)"),
+                       size=1 << 20, volts=3, bypass=False,
+                       src="SST SST39VF080 (S71146 EOL): 8 Mbit, 1M x8, 256 секторов по 4 КиБ (плюс стирание блоком 64 КиБ), 2.7-3.6 В; unlock bypass 20h нет"),
     # --- Intel 28F-серия (CUI-протокол) ---
     # По datasheet: 28F008SA — sixteen 64-Kbyte blocks (1 MByte),
     # 28F016SA — thirty-two 64-KB blocks (2 MByte).
