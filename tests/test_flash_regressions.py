@@ -692,7 +692,7 @@ check("MX29F1610: прежние 64 КиБ - отказ, сосед назван
 # честно: чип работает, но отчёт предупреждает, а src говорит, что сверки нет.
 # Am29PL320/640/1280 добавлены в 2.17.6: таких имён нет ни в flashchips.h, ни
 # в jedec_probe.c, то есть строка держалась на догадке.
-UNVERIFIED = {"D28F010", "D28F020", "HN28F010", "HN28F020", "HN28F100",
+UNVERIFIED = {"HN28F010", "HN28F020", "HN28F100",
               "LH28F010", "LH28F020", "M28F008", "M28F016",
               "M5M29F010", "M5M29F020", "MX29F3210",
               "Am29PL320", "Am29PL640", "Am29PL1280",
@@ -1866,6 +1866,86 @@ _junk = [p for p in _fake_probs if "__pycache__" in p or ".card-state.txt" in p]
 _leftover = [p for p in _fake_probs if p.endswith("left.orig")]
 check("кэш Python - не дефект, остаток правки (.orig) - дефект",
       not _junk and bool(_leftover), (_junk[:2], _leftover[:2]))
+
+
+
+# --- 24. D28F010/D28F020 - это Intel в керамике, а не NEC с JEDEC-циклами --
+# Аудит 2.17.17. Строки стояли как «NEC D28F010/020» с адресами 555h/2AAh и
+# пометкой «не сверено». Даташита NEC с таким именем найти не удалось, а три
+# независимых источника сходятся на другом: D28F... - керамическое (CDIP)
+# исполнение Intel 28F010/28F020 военной серии MD28F...:
+#  * справочники: D28F010-120P1C4 - Intel, CERAMIC DIP32, 128K x 8,
+#    «Command User Interface: YES», «Data Polling: NO» (то есть CUI, не JEDEC);
+#  * перечень заказных комбинаций самого Intel 28F010 (290207-010) знает
+#    P28F010/N28F010/E28F010/F28F010 и T-варианты; керамика идёт отдельной
+#    военной серией MD28F010/MD28F020 (Rochester: «28F020 - 2048K (256K x 8),
+#    Mil Temp»);
+#  * таблица соответствий AMD (1992): Intel D28F010-150P1C4 = Am28F010-150DC;
+#  * перечень D28-серии: D28F020-150 (DIP), D28F256-200P1C2 (INT, CDIP).
+# Значит команды у них те же, что у 28F010/28F020: регистр команд (00h/90h/
+# 20h+20h/40h/A0h/C0h/FFh), 12 В на Vpp, стирание только ВСЕГО чипа, без
+# статусного регистра 70h - и такие строки обязаны быть ro.
+section("D28F010/D28F020: Intel в керамике (CUI), как 28F010/28F020")
+
+bad = []
+for name, size in (("D28F010", 128 << 10), ("D28F020", 256 << 10)):
+    geo = D.GEOMETRY.get(name) or {}
+    if geo.get("unverified"):
+        bad.append("%s: всё ещё «не сверено»" % name)
+    if geo.get("protocol") != "intel" or not geo.get("ro"):
+        bad.append("%s: protocol %s, ro %s"
+                   % (name, geo.get("protocol"), geo.get("ro")))
+    if tuple(geo.get("cmd") or ()) != (0, 0):
+        bad.append("%s: cmd %s вместо (0, 0)" % (name, geo.get("cmd")))
+    if geo.get("size") != size or geo.get("sector") != size:
+        bad.append("%s: size %s, sector %s (стирается только весь чип)"
+                   % (name, geo.get("size"), geo.get("sector")))
+    if geo.get("volts") != 12:
+        bad.append("%s: volts %s" % (name, geo.get("volts")))
+    src = str(geo.get("src") or "")
+    if "керамич" not in src or "290207" not in src:
+        bad.append("%s: в src нет источника" % name)
+check("D28F010/020: Intel CUI, ro, cmd (0,0), сектор = весь чип, 12 В, источник",
+      not bad, str(bad[:3]))
+
+# M28F102: по даташиту ST (август 1998) стирание только целиком, поэтому и у
+# него предохранитель должен стоять в самом NorFlash, а не только в
+# check_sector_map (как у 28F010/28F020 с 2.17.11).
+m102 = D.GEOMETRY["M28F102"]
+check("M28F102: ro в NorFlash, причина - стирание только целиком",
+      bool(m102.get("ro")) and "целиком" in str(m102.get("why") or ""),
+      (m102.get("ro"), (m102.get("why") or "")[:60]))
+
+# Инвариант: 12-вольтовая строка не может выглядеть обычной пишущейся
+# JEDEC-микросхемой. У первых поколений либо регистр команд (Intel CUI), либо
+# честная пометка «не сверено», либо отказ с объяснением.
+susp = []
+for name, geo in sorted(D.GEOMETRY.items()):
+    if geo.get("volts") != 12:
+        continue
+    if (geo.get("protocol") == "intel" or bool(geo.get("unverified"))
+            or (bool(geo.get("ambiguous")) and bool(geo.get("why")))):
+        continue
+    susp.append(name)
+check("ни одна 12-вольтовая строка не притворяется обычной JEDEC-микросхемой",
+      not susp, str(susp[:4]))
+
+# Поведение на модели: ro доходит до NorFlash, данные не портятся.
+card_d, _bus_d, flash_d = NM.make(kit=KIT, chips=1, chip_name="D28F010",
+                                  blank=False)
+before_d = bytes(card_d.mem[0][:64])
+ans_d = [flash_d.program_byte(0, 0x5A), flash_d.erase_sector(0),
+         flash_d.erase_chip()]
+check("D28F010 (модель): запись/сектор/чип - отказ, массив не тронут",
+      all(not ok for ok, _w in ans_d) and bytes(card_d.mem[0][:64]) == before_d,
+      (ans_d[0][1][:60], bytes(card_d.mem[0][:4]).hex()))
+try:
+    D.check_sector_map(D.geometry_for("D28F010"))
+    refuse_d = ""
+except D.DirectError as exc:
+    refuse_d = str(exc)
+check("D28F010: открытие по имени отвергается с объяснением (Vpp, весь чип)",
+      "ВСЕГО чипа" in refuse_d and "Vpp" in refuse_d, refuse_d[:80])
 
 
 
