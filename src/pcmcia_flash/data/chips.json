@@ -742,12 +742,12 @@
       "cmd_addr2": "0x2aa",
       "wide": false,
       "page": 32,
-      "bypass": true,
+      "bypass": false,
       "strata": true,
       "protocol": "jedec",
       "volts": 3,
       "manuf": "AMD",
-      "notes": "обозначение не сверено: 32 Mbit, StrataFlash, буферная запись",
+      "notes": "обозначение не сверено: 32 Mbit, StrataFlash, буферная запись; 20h не включаем - документа на это имя нет",
       "unverified": true
     },
     "Am29PL640": {
@@ -758,12 +758,12 @@
       "cmd_addr2": "0x2aa",
       "wide": false,
       "page": 32,
-      "bypass": true,
+      "bypass": false,
       "strata": true,
       "protocol": "jedec",
       "volts": 3,
       "manuf": "AMD",
-      "notes": "обозначение не сверено: 64 Mbit, StrataFlash, буферная запись",
+      "notes": "обозначение не сверено: 64 Mbit, StrataFlash, буферная запись; 20h не включаем - документа на это имя нет",
       "unverified": true
     },
     "Am29PL1280": {
@@ -774,12 +774,12 @@
       "cmd_addr2": "0x2aa",
       "wide": false,
       "page": 32,
-      "bypass": true,
+      "bypass": false,
       "strata": true,
       "protocol": "jedec",
       "volts": 3,
       "manuf": "AMD",
-      "notes": "обозначение не сверено: 128 Mbit, StrataFlash, буферная запись",
+      "notes": "обозначение не сверено: 128 Mbit, StrataFlash, буферная запись; 20h не включаем - документа на это имя нет",
       "unverified": true
     },
     "MBM29F016": {
@@ -811,6 +811,21 @@
       "volts": 5,
       "manuf": "Fujitsu",
       "notes": "16 Mbit (2M x8), 32 сектора по 64 КБ, 5.0 V-Only; имя и JEDEC ID 04h/ADh — как в даташите Fujitsu DS05-20807-3E (2.18.2: ID перенесён сюда со строки MBM29F016, потому что документ Fujitsu описывает именно MBM29F016A)"
+    },
+    "MBM29F033C": {
+      "jedec_id": null,
+      "size_kib": 4096,
+      "sector_kib": 64,
+      "cmd_addr1": "0x555",
+      "cmd_addr2": "0x2aa",
+      "wide": false,
+      "page": null,
+      "bypass": false,
+      "strata": false,
+      "protocol": "jedec",
+      "volts": 5,
+      "manuf": "Fujitsu",
+      "notes": "Fujitsu MBM29F033C (46 стр.): 32M-bit, 4M x 8, 64 сектора по 64 КиБ, 5.0 V-only, JEDEC; 12 В Vpp не нужен, Unlock Bypass 20h в документе не упомянут"
     },
     "MBM29F040C": {
       "jedec_id": "0xA4",
@@ -964,8 +979,7 @@
       "protocol": "intel",
       "volts": 5,
       "manuf": "Intel",
-      "notes": "16 Mbit, CUI, 5 В. ID A0h — flashrom flashchips.h (INTEL_28F016SV «28F016SA/SV»)",
-      "unverified": true
+      "notes": "16 Mbit, CUI, SmartVoltage (Vpp 5 или 12 В), 32 блока по 64 КиБ — Intel «16-Mbit FlashFile Memory», 297349-003 (28F016SA/28F016SV); ID A0h — flashrom flashchips.h. Две буферные страницы по 256 Б в документе есть, но код пишет побайтно (page не задан)"
     },
     "28F016S5": {
       "jedec_id": null,
@@ -1753,7 +1767,7 @@
     "MBM29F016", "MBM29F016A", "MBM29F040C", "MBM29F002TC", "MBM29F002BC", "MBM29F004TC", "MBM29F004BC",
     "M29F002BT", "M29F002BB", "M29F400BT", "M29F400BB", "MBM29DL322", "MBM29DL642",
     "MBM29GL064", "MBM29GL128", "HN28F010", "HN28F020", "HN28F100", "M5M29F010",
-    "M5M29F020", "MX29F1610", "MX29F3210", "SST39VF010", "SST39VF020", "SST39VF040",
+    "M5M29F020", "MX29F1610", "MX29F3210", "MBM29F033C", "SST39VF010", "SST39VF020", "SST39VF040",
     "SST39VF080", "TC58FVT160", "TC58FVT321", "28F004S5", "28F008S5", "28F016S5",
     "Am29DL322DB", "Am29DL322DT", "Am29DL323DB", "Am29DL323DT",
     "Am29DL324DB", "Am29DL324DT", "MBM29DL322BE", "MBM29DL322TE",

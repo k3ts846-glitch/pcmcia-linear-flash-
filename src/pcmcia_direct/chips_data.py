@@ -111,7 +111,7 @@ VPP5 = {"Am29F016", "Am29F800", "Am29F400", "Am29F040", "Am29F200", "Am29F010",
         "Am29F800BB", "Am29F800BT", "Am29F080B", "Am29F017D", "Am29F032B",
         "Am29LV001BB", "Am29LV001BT", "Am29LV040B", "Am29LV400BB",
         "Am29LV400BT", "Am29LV800BB", "Am29LV800BT", "Am29LV160DB",
-        "Am29LV160DT", "MBM29F016A", "MBM29F040C",
+        "Am29LV160DT", "MBM29F016A", "MBM29F033C", "MBM29F040C",
         # Fujitsu/Spansion и ST: 2 и 4 Мбит boot-block, 5.0 V only
         "MBM29F002TC", "MBM29F002BC", "MBM29F004TC", "MBM29F004BC",
         "M29F002BT", "M29F002BB", "M29F400BT", "M29F400BB",
@@ -272,10 +272,8 @@ GEOMETRY = {
                           "Program Command», поэтому bypass=True. JEDEC ID "
                           "тот же 01AD, что у Am29F016, - отличать по CFI"),
     "Am29F032": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=4 << 20, volts=5, bypass=True, unverified=True,
-                     src="AMD Am29F032: в селекторе AMD 32-Мбит 5-вольтовая часть "
-                         "называется Am29F032B, имени без B там нет; параметры "
-                         "(64 x 64 КиБ, 5 В) взяты как у Am29F032B - не сверены"),
+                     size=4 << 20, volts=5, bypass=False, unverified=True,
+                     src="AMD Am29F032: в селекторе AMD 32-Мбит 5-вольтовая часть называется Am29F032B, имени без B там нет; параметры (64 x 64 КиБ, 5 В) взяты как у Am29F032B - не сверены; 20h не включаем"),
     "Am29F080": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      size=1 << 20, volts=5, bypass=False,
                      src="AMD Am29F080: 16 x 64 КиБ, 5 В, побайтно A0h; Unlock "
@@ -464,11 +462,19 @@ GEOMETRY = {
                        src="Fujitsu MBM29F016A (16M (2M x 8) BIT): 32 сектора "
                            "по 64 КиБ, 5.0 V-Only, ID 04h/ADh; unlock bypass "
                            "20h даташитом не подтверждён - пишем A0h"),
+    # 2.18.3: документ нашёлся, но на имя с буквой ревизии - MBM29F033C
+    # (Fujitsu, 46 стр.): «32M-bit, 5.0 V-Only ... divided into 64 sectors of
+    # 64K bytes», JEDEC-команды, «A 12.0 V VPP is not required». Параметры
+    # строки с ним совпадают, поэтому у ревизии отдельная сверенная строка, а
+    # имя без «C» остаётся «не сверено» - так же, как Am29F032 без «B».
+    # Unlock Bypass (20h) в документе не упоминается - bypass выключен.
+    "MBM29F033C": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                       size=4 << 20, volts=5,
+                       src="Fujitsu MBM29F033C (46 стр.): 32M-bit, 4M x 8, "
+                           "64 сектора по 64 КиБ, 5.0 V-only, JEDEC"),
     "MBM29F033": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                      size=4 << 20, volts=5, bypass=True, unverified=True,
-                      src="Fujitsu MBM29F033: имени нет ни в flashchips.h, ни в "
-                          "jedec_probe.c; 64 x 64 КиБ и 5 В - данные по умолчанию, "
-                          "даташитом не сверены"),
+                      size=4 << 20, volts=5, bypass=False, unverified=True,
+                      src="Fujitsu MBM29F033: даташит нашёлся только на имя с ревизией - MBM29F033C (64 сектора по 64 КиБ, 5 В); само имя без «C» документом не подтверждено, 20h не включаем"),
     "MBM29F002": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      ambiguous=True,
                      size=256 << 10, volts=5,
@@ -650,9 +656,8 @@ GEOMETRY = {
     # 32-Мбит версия того же семейства; даташита под рукой нет, поэтому
     # раскладка взята по аналогии (32 x 128 КиБ) и строка помечена unverified.
     "MX29F3210": dict(sector=128 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                      size=4 << 20, volts=5, bypass=True, unverified=True,
-                      src="Macronix MX29F3210: 4 МиБ, 5 В; раскладка 32 x 128 КиБ "
-                          "взята по аналогии с MX29F1610 - даташитом не сверена"),
+                      size=4 << 20, volts=5, bypass=False, unverified=True,
+                      src="Macronix MX29F3210: 4 МиБ, 5 В - по аналогии с MX29F1610, даташитом не сверено; в линейке Macronix 5-вольтовый MX29F - только 2-8 Мбит (страница Parallel NOR Flash), 32 Мбит у них 3-вольтовые (MX29LV/MX29GL); 20h не включаем"),
     # --- SST ---
     # SST39VF010/020 (даташит Microchip/SST DS20005023: «Sector-Erase
     # Capability - Uniform 4 KByte sectors», 2.7-3.6 В, Software Data
@@ -710,12 +715,17 @@ GEOMETRY = {
     # (E28F016SV-070, 63 стр.) есть ёмкость, CUI и «user-selectable VPP
     # voltage»; про «32 блока по 64 КиБ» цитаты нет, поэтому пометка остаётся
     # в ОБЕИХ таблицах, а не выдаётся за проверку.
+    # 2.18.3: «не сверено» снято - документ нашёлся. Intel, «16-Mbit
+    # FlashFile Memory» (product brief 297349-003, 28F016SA/28F016SV):
+    # «They contain 32 64-Kbyte (65,536 byte) blocks, each block separately
+    # erasable»; SmartVoltage - «the option of 5V Vpp operation» (или 12 В);
+    # x8/x16; набор команд - надмножество 28F008SA. Всё сходится со строкой.
+    # В документе есть две 256-байтовые буферные страницы, но код умеет буфер
+    # не больше INTEL_BUFFER_SIZE (32 байта), а «половину буфера» писать
+    # нельзя - поэтому page=1 и побайтная запись командой 40h.
     "28F016SV": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=True,
-                     size=2 << 20, volts=5, protocol="intel", unverified=True,
-                     src="Intel 28F016SV: 16 Мбит (1 Мбит x16 / 2 Мбит x8), "
-                         "CUI, Vpp на выбор (5 или 12 В) - по даташиту "
-                         "E28F016SV-070; карта блоков (32 по 64 КиБ) взята из "
-                         "базы пакета и даташитом не сверена"),
+                     size=2 << 20, volts=5, protocol="intel",
+                     src="Intel 28F016SV: 16 Мбит (1 Мбит x16 / 2 Мбит x8), CUI, SmartVoltage (Vpp 5 или 12 В), 32 блока по 64 КиБ - Intel «16-Mbit FlashFile Memory», 297349-003 (28F016SA/28F016SV)"),
     # Даташит Intel 28F016S5 («Byte-Wide Smart 5 FlashFile Memory»): «64-Kbyte
     # Symmetrical Erase Block Architecture ... 16 Mbit: Thirty-Two Blocks».
     # Прежние 128 КиБ давали ложный отказ blank-check и запись через границу
@@ -757,18 +767,14 @@ GEOMETRY = {
     # похоже на «PL» из Spansion S29PL, но это уже другой ряд микросхем.
     # Данные ниже - не сверенные, и это написано прямо в src.
     "Am29PL320": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                      size=4 << 20, volts=3, bypass=True, strata=True, unverified=True,
-                      src="Am29PL320: обозначение даташитом не подтверждено (нет ни в "
-                          "flashchips.h, ни в jedec_probe.c); 4 МиБ, буфер 32 байта - "
-                          "по аналогии с DL/GL, не сверено"),
+                      size=4 << 20, volts=3, bypass=False, strata=True, unverified=True,
+                      src="Am29PL320: обозначение даташитом не подтверждено (нет ни в flashchips.h, ни в jedec_probe.c); ёмкость и буфер 32 байта - по аналогии с DL/GL, не сверено; 20h не включаем"),
     "Am29PL640": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                      size=8 << 20, volts=3, bypass=True, strata=True, unverified=True,
-                      src="Am29PL640: обозначение даташитом не подтверждено; 8 МиБ - "
-                          "по аналогии с DL/GL, не сверено"),
+                      size=8 << 20, volts=3, bypass=False, strata=True, unverified=True,
+                      src="Am29PL640: обозначение даташитом не подтверждено (нет ни в flashchips.h, ни в jedec_probe.c); ёмкость и буфер 32 байта - по аналогии с DL/GL, не сверено; 20h не включаем"),
     "Am29PL1280": dict(sector=64 << 10, page=32, cmd=(0x555, 0x2AA), wide=False,
-                       size=16 << 20, volts=3, bypass=True, strata=True, unverified=True,
-                       src="Am29PL1280: обозначение даташитом не подтверждено; 16 МиБ - "
-                           "по аналогии с DL/GL, не сверено"),
+                       size=16 << 20, volts=3, bypass=False, strata=True, unverified=True,
+                       src="Am29PL1280: обозначение даташитом не подтверждено (нет ни в flashchips.h, ни в jedec_probe.c); ёмкость и буфер 32 байта - по аналогии с DL/GL, не сверено; 20h не включаем"),
     # AMD Am29DL322D/323D/324D (даташит 21534d, декабрь 2005): «32 Megabit
     # (4 M x 8-Bit/2 M x 16-Bit) CMOS **3.0 Volt-only**, Simultaneous Operation».
     # Table 2: Bank 1 = восемь секторов по 8 КиБ + семь по 64 КиБ, Bank 2 = 56 по
@@ -930,26 +936,26 @@ GEOMETRY = {
     # ====================================================================
     # --- Hitachi ---
     "HN28F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=128 << 10, volts=5, bypass=True,
+                     size=128 << 10, volts=5, bypass=False,
                      unverified=True,
-                     src="Hitachi HN28F010: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
+                     src="HN28F010: параметры даташитом не сверены; по схеме обозначений Hitachi (перечень программатора elnec) 5-вольтовый HN28F101 - это 128K x 8, а имён HN28F010/HN28F100 в перечнях нет; 20h не включаем"),
     "HN28F020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=256 << 10, volts=5, bypass=True,
+                     size=256 << 10, volts=5, bypass=False,
                      unverified=True,
-                     src="Hitachi HN28F020: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
+                     src="HN28F020: параметры даташитом не сверены; по схеме обозначений Hitachi (перечень программатора elnec) 5-вольтовый HN28F101 - это 128K x 8, а имён HN28F010/HN28F100 в перечнях нет; 20h не включаем"),
     "HN28F100": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=1 << 20, volts=5, bypass=True,
+                     size=1 << 20, volts=5, bypass=False,
                      unverified=True,
-                     src="Hitachi HN28F100: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
+                     src="HN28F100: параметры даташитом не сверены; по схеме обозначений Hitachi (перечень программатора elnec) 5-вольтовый HN28F101 - это 128K x 8, а имён HN28F010/HN28F100 в перечнях нет; 20h не включаем"),
     # --- Mitsubishi ---
     "M5M29F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                      size=128 << 10, volts=5, bypass=True,
+                      size=128 << 10, volts=5, bypass=False,
                       unverified=True,
-                     src="Mitsubishi M5M29F010: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
+                     src="M5M29F010: параметры даташитом не сверены; документа на это имя не нашли (искали 2026-11), 20h не включаем"),
     "M5M29F020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                      size=256 << 10, volts=5, bypass=True,
+                      size=256 << 10, volts=5, bypass=False,
                       unverified=True,
-                     src="Mitsubishi M5M29F020: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
+                     src="M5M29F020: параметры даташитом не сверены; документа на это имя не нашли (искали 2026-11), 20h не включаем"),
     # --- Intel в керамическом корпусе (D = CDIP), НЕ NEC ------------------
     # Аудит 2.17.17. В таблице эти две строки стояли как «NEC D28F010/020» с
     # JEDEC-адресами 555h/2AAh. Даташита NEC с таким именем найти не удалось,
@@ -985,10 +991,10 @@ GEOMETRY = {
     # --- Sharp ---
     "LH28F010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      size=128 << 10, volts=12, unverified=True,
-                     src="Sharp LH28F010: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
+                     src="LH28F010: параметры даташитом не сверены; документа на это имя не нашли (искали 2026-11), 20h не включаем"),
     "LH28F020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      size=256 << 10, volts=12, unverified=True,
-                     src="Sharp LH28F020: параметры (ёмкость, сектор, напряжение) даташитом не сверены; проверьте первый сектор на копии карты"),
+                     src="LH28F020: параметры даташитом не сверены; документа на это имя не нашли (искали 2026-11), 20h не включаем"),
     # --- Intel, военная серия (M28F...), НЕ ST --------------------------
     # Аудит 2.17.18. Строка числилась за ST и стояла с JEDEC-адресами
     # 555h/2AAh. Источники говорят другое: M28F008 - это ВОЕННОЕ исполнение
