@@ -100,7 +100,15 @@ def _build_geometry(chips: dict[str, Any]) -> dict[str, dict[str, Any]]:
             # есть - HN28F*, LH28F*, M28F016, M5M29F*, MX29F3210, Am29PL*,
             # Am29F032, MBM29F033; D28F* и M28F008 сверены в 2.17.17/2.17.18).
             "unverified": bool(chip.get("unverified", False)),
+            # ro - микросхема в наборе только читается (12 В на Vpp, стирание
+            # только ВСЕГО чипа): NorFlash обязан отказать и до, и после
+            # проверки геометрии. До 2.17.21 это поле не переносилось, поэтому
+            # в пакете не могло быть ни одной строки «только чтение».
+            "ro": bool(chip.get("ro", False)),
         }
+        if geometry[name]["ro"] and not geometry[name]["why"]:
+            raise DirectError(f"{name}: ro без why - отказ должен быть "
+                              "объяснён словами даташита")
     return geometry
 
 

@@ -2004,6 +2004,73 @@ bad_st25 = [n for n in ("M28F008", "M28F016")
 check("M28F008/M28F016: ни одна строка больше не выдаёт себя за ST",
       not bad_st25, str(bad_st25))
 
+# --- 26. chips.json: Intel CUI без адресов и сверенные 12-вольтовые строки ---
+# 2.17.21. В базе пакета у пяти строк с protocol="intel" стояли адреса
+# 5555h/2aaah - ровно та картина «обычная JEDEC-микросхема», из-за которой
+# в 2.17.15-2.17.18 пришлось переписывать 28F256/512, D28F010/020 и
+# M28F008/016. У Intel CUI адрес команды не декодируется вовсе: в монолите
+# все строки CUI стоят с cmd=(0,0), так же должно быть и в chips.json.
+# Там же появились три строки, сверенные по даташиту в 2.17.17/2.17.18:
+# до этого пакет их не знал, хотя vpp126 их перечислял, - то есть в одной
+# реализации карта с такой микросхемой открывалась, а в другой нет.
+section("chips.json: у Intel CUI команда по адресу (0,0), сверенные 12-вольтовые строки на месте")
+
+bad_intel = []
+for where, table in (("монолит", D.GEOMETRY), ("пакет", C.CHIP_GEOMETRY)):
+    for name, geo_row in table.items():
+        if (geo_row.get("protocol") or "jedec") != "intel":
+            continue
+        if tuple(geo_row.get("cmd") or ()) != (0, 0):
+            bad_intel.append("%s/%s: %s"
+                             % (where, name, tuple(geo_row.get("cmd") or ())))
+check("у всех строк Intel CUI команда по адресу (0,0)", not bad_intel,
+      str(bad_intel[:3]))
+
+bad_rows = []
+for name in ("D28F010", "D28F020", "M28F008"):
+    mono_geo = D.GEOMETRY[name]
+    pkg_geo = C.CHIP_GEOMETRY.get(name) or {}
+    if not pkg_geo:
+        bad_rows.append(name + ": нет в chips.json")
+        continue
+    for key in ("size", "sector", "volts", "protocol"):
+        if mono_geo.get(key) != pkg_geo.get(key):
+            bad_rows.append("%s: %s %r/%r"
+                            % (name, key, mono_geo.get(key), pkg_geo.get(key)))
+    if bool(mono_geo.get("ro")) != bool(pkg_geo.get("ro")):
+        bad_rows.append("%s: ro %s/%s"
+                        % (name, mono_geo.get("ro"), pkg_geo.get("ro")))
+    if (mono_geo.get("why") or "") != (pkg_geo.get("why") or ""):
+        bad_rows.append("%s: why %r/%r" % (name, mono_geo.get("why"),
+                                           pkg_geo.get("why")))
+check("D28F010/020 и M28F008 есть в обеих таблицах и совпадают (ro и why тоже)",
+      not bad_rows, str(bad_rows[:3]))
+
+from pcmcia_flash import chip_db as _cdb                            # noqa: E402
+from pcmcia_flash import nor_flash as _pkg_nor                      # noqa: E402
+
+geo_pkg_ro = C.CHIP_GEOMETRY["D28F010"]
+pkg_ro_flash = _pkg_nor.NorFlash(_SilentBus(), chips=1,
+                                 sector=geo_pkg_ro["sector"], name="D28F010",
+                                 protocol=geo_pkg_ro["protocol"],
+                                 ro=bool(geo_pkg_ro.get("ro")),
+                                 ro_why=str(geo_pkg_ro.get("why") or ""))
+ans_pkg = [pkg_ro_flash.program_byte(0, 0x5A), pkg_ro_flash.erase_sector(0),
+           pkg_ro_flash.erase_chip()]
+check("D28F010 (пакет): запись/сектор/чип - отказ со словами даташита",
+      all(not ok and "не выполняется" in why and "12 В" in why
+          for ok, why in ans_pkg), str(ans_pkg[0][1][:70]))
+
+try:
+    _cdb._build_geometry({"X": {"size_kib": 128, "sector_kib": 128,
+                                "cmd_addr1": "0x0", "cmd_addr2": "0x0",
+                                "volts": 12, "manuf": "Intel", "ro": True}})
+    no_why = ""
+except _cdb.DirectError as exc:
+    no_why = str(exc)
+check("chips.json: ro без why не загружается (отказ обязан быть объяснён)",
+      "why" in no_why, no_why[:70])
+
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)
 print("ИТОГО: прошло %d, провалено %d" % (len(PASS), len(FAIL)))
