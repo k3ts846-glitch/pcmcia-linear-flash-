@@ -109,11 +109,26 @@ def check_sector_map(geo: dict) -> dict:
     pairs = sector_map(geo)
     size = int(geo.get("size") or 0)
     name = geo.get("name") or "микросхема"
+    if geo.get("ambiguous") and geo.get("why"):
+        hint = geo.get("notes") or geo.get("src") or ""
+        raise UnsupportedChip(
+            f"{name}: {geo['why']}"
+            + (f" Подробнее: {hint.rstrip('.')}." if hint else "")
+        )
     if geo.get("why"):
         hint = geo.get("notes") or geo.get("src") or ""
         raise UnsupportedChip(
             f"{name}: {geo['why']}"
             + (f" Подробнее: {hint.rstrip('.')}." if hint else "")
+        )
+    if geo.get("ambiguous"):
+        # Та же мысль, что в монолите: без ревизии неизвестна раскладка.
+        raise UnsupportedChip(
+            f"{name}: ревизия не указана, а у boot-чипов от неё зависит "
+            "раскладка секторов (16K + 2x8K + 32K + 64K...). Укажите точное "
+            "имя ключом --chip (например Am29F800BB для bottom-boot или "
+            "Am29F800BT для top-boot): иначе первое же стирание заденет "
+            "соседние данные."
         )
     if not pairs or not size:
         hint = geo.get("notes") or geo.get("src") or ""

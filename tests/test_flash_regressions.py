@@ -2129,6 +2129,79 @@ check("каждая 12-вольтовая строка есть в VPP126", not 
       str(missing_12[:4]))
 check("каждая 5-вольтовая строка есть в VPP5", not missing_5, str(missing_5[:4]))
 
+# --- 28. Пакет: отказы и предупреждения как в монолите -----------------------
+# 2.17.23. Пять 12-вольтовых строк (28F010, 28F020, 28F256, 28F512, M28F102)
+# знал только монолит: в пакете их не было, и карта с такой микросхемой там
+# просто не открывалась. Перенесены вместе с ro и той же формулировкой why.
+# Заодно закрыты две дырки пакета:
+#   * `ambiguous` не переносилось в геометрию, поэтому отказ «ревизия не
+#     указана» (boot-чипы с раскладкой 16K+2x8K+32K+64K) в пакете не работал;
+#   * `unverified` переносилось, но нигде не выводилось - пакет молчал там,
+#     где монолит печатает «параметры не сверены с даташитом».
+section("пакет: 12-вольтовые ro-строки, отказ по ревизии и предупреждение о несверенных данных")
+
+ro_names = ("28F010", "28F020", "28F256", "28F512", "M28F102")
+bad_ro = []
+for name in ro_names:
+    mono_geo = D.GEOMETRY[name]
+    pkg_geo = C.CHIP_GEOMETRY.get(name) or {}
+    if not pkg_geo:
+        bad_ro.append(name + ": нет в chips.json")
+        continue
+    for key in ("size", "sector", "volts"):
+        if mono_geo.get(key) != pkg_geo.get(key):
+            bad_ro.append("%s: %s %r/%r" % (name, key, mono_geo.get(key),
+                                            pkg_geo.get(key)))
+    # protocol: пустое значение в монолите означает JEDEC (так же, как в
+    # общей сверке двух таблиц).
+    if (mono_geo.get("protocol") or "jedec") != (pkg_geo.get("protocol") or "jedec"):
+        bad_ro.append("%s: protocol %r/%r" % (name, mono_geo.get("protocol"),
+                                              pkg_geo.get("protocol")))
+    if not pkg_geo.get("ro") or bool(pkg_geo.get("ro")) != bool(mono_geo.get("ro")):
+        bad_ro.append(name + ": ro")
+    if (pkg_geo.get("why") or "") != (mono_geo.get("why") or ""):
+        bad_ro.append(name + ": why")
+    if not pkg_geo.get("ambiguous"):
+        bad_ro.append(name + ": потеряно ambiguous")
+check("пять 12-вольтовых ro-строк есть в обеих таблицах и совпадают",
+      not bad_ro, str(bad_ro[:3]))
+
+bad_refuse = []
+for name in ro_names:
+    try:
+        C.geometry_for(name)
+        bad_refuse.append(name + ": открылся")
+    except C.UnsupportedChip as exc:
+        if (D.GEOMETRY[name].get("why") or "") not in str(exc):
+            bad_refuse.append("%s: другая причина: %s" % (name, str(exc)[:40]))
+    except Exception as exc:                                  # noqa: BLE001
+        bad_refuse.append("%s: %r" % (name, exc))
+check("пакет отказывает по имени и цитирует ту же причину, что монолит",
+      not bad_refuse, str(bad_refuse[:3]))
+
+# ambiguous без why: раньше пакет пропускал такую строку молча.
+try:
+    C.check_sector_map({"name": "ТестовыйBoot", "size": 1 << 20,
+                        "sector": 64 << 10, "ambiguous": True})
+    rev_text = ""
+except C.UnsupportedChip as exc:
+    rev_text = str(exc)
+check("пакет: строка с ambiguous без why отвергается словами про ревизию",
+      "ревизия не указана" in rev_text and "--chip" in rev_text, rev_text[:70])
+
+# unverified обязан попасть в отчёт о карте.
+_geo_unv = C.geometry_for("Am29PL320")
+_parts_unv = {"geo": _geo_unv, "chips": 1, "size": _geo_unv["size"],
+              "how": "тест",
+              "win": {"start": 0xC0000, "size": 4 << 20},
+              "bus": _types.SimpleNamespace(span=8192)}
+_buf_unv = _io.StringIO()
+with _ctx.redirect_stdout(_buf_unv):
+    _pcli._flash_report(_parts_unv)
+check("пакет: в отчёте есть предупреждение «параметры не сверены»",
+      "не сверены с даташитом" in _buf_unv.getvalue(),
+      _buf_unv.getvalue()[-200:])
+
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)
 print("ИТОГО: прошло %d, провалено %d" % (len(PASS), len(FAIL)))
