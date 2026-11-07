@@ -1355,7 +1355,7 @@
       "why": "стирание только ВСЕГО чипа (20h+20h, нужны 12 В на Vpp) и нет статусного регистра 70h - набор её не пишет"
     },
     "28F020": {
-      "jedec_id": null,
+      "jedec_id": "0xBD",
       "size_kib": 256,
       "sector_kib": 256,
       "cmd_addr1": "0x0",
@@ -1369,11 +1369,11 @@
       "manuf": "Intel",
       "ambiguous": true,
       "ro": true,
-      "notes": "Intel 28F020: 256 KiB, то же первое поколение (12 В, bulk erase)",
+      "notes": "Intel 28F020 (256K x 8, даташит 290245-009): 00h/90h/20h+20h/40h/A0h/C0h/FFh, байт, 12 В, блочного стирания нет; Intelligent Identifier 89h/BDh",
       "why": "стирание только ВСЕГО чипа (20h+20h, нужны 12 В на Vpp) и нет статусного регистра 70h - набор её не пишет"
     },
     "28F256": {
-      "jedec_id": null,
+      "jedec_id": "0xB9",
       "size_kib": 32,
       "sector_kib": 32,
       "cmd_addr1": "0x0",
@@ -1387,11 +1387,11 @@
       "manuf": "Intel",
       "ambiguous": true,
       "ro": true,
-      "notes": "Intel 28F256A (32K x 8, даташит 290243-006): 00h/90h/20h+20h/40h/A0h/C0h/FFh, байт, 12 В +-5% на Vpp",
+      "notes": "Intel 28F256A (32K x 8, даташит 290243-006): 00h/90h/20h+20h/40h/A0h/C0h/FFh, байт, 12 В +-5% на Vpp; Intelligent Identifier 89h/B9h",
       "why": "стирание только ВСЕГО чипа (20h+20h, нужны 12 В на Vpp) и нет статусного регистра 70h - набор её не пишет"
     },
     "28F512": {
-      "jedec_id": null,
+      "jedec_id": "0xB8",
       "size_kib": 64,
       "sector_kib": 64,
       "cmd_addr1": "0x0",
@@ -1405,7 +1405,7 @@
       "manuf": "Intel",
       "ambiguous": true,
       "ro": true,
-      "notes": "Intel 28F512 (64K x 8): 00h/90h/20h+20h/40h/A0h/C0h/FFh, байт, 12 В +-5% на Vpp, блочного стирания нет",
+      "notes": "Intel 28F512 (64K x 8, даташит 290204-008): 00h/90h/20h+20h/40h/A0h/C0h/FFh, байт, 12 В +-5% на Vpp, блочного стирания нет; Intelligent Identifier 89h/B8h",
       "why": "стирание только ВСЕГО чипа (20h+20h, нужны 12 В на Vpp) и нет статусного регистра 70h - набор её не пишет"
     },
     "M28F102": {

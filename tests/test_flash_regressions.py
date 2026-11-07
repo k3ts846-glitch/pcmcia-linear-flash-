@@ -143,12 +143,23 @@ check("микросхема без CFI -> пустой ответ, а не му�
 # NorFlash живёт в nor.py, а nor.py берёт имена из chips.py — импорт внутри
 # функции обязателен, иначе кольцо. Пропущенный импорт виден только вызовом:
 # ruff (F821) нашёл его в разбитом монолите, а прежние тесты не звали функцию.
-card, bus, flash = NM.make(kit=KIT, chips=1, chip_name="28F008SA", blank=False)
+# 2.18.4: до этого раунда проверка проходила СЛУЧАЙНО: read_id слал два байта
+# 90h подряд, модель на карте с ОДНИМ чипом такую команду отвергала, и
+# «молчащей» выглядела вполне отвечающая микросхема. Теперь молчание задаётся
+# моделью явно (answer_id=False), а рядом проверяется обратное.
+card, bus, flash = NM.make(kit=KIT, chips=1, chip_name="28F008SA", blank=False,
+                           answer_id=False)
 _silent = D._autodetect_intel(flash)
 check("Intel ID: функция зовётся (NorFlash подключается внутри, без кольца)",
       isinstance(_silent, dict), repr(_silent))
 check("Intel ID: молчащая микросхема -> пустой ответ, а не 0x00 в имени",
       _silent == {}, repr(_silent))
+
+card, bus, flash = NM.make(kit=KIT, chips=1, chip_name="28F008SA", blank=False)
+_loud = D._autodetect_intel(flash)
+check("Intel ID: карта с ОДНИМ чипом опознаётся (89h/A2h -> 28F008SA)",
+      _loud.get("manuf") == 0x89 and _loud.get("device") == 0xA2
+      and _loud.get("name") == "28F008SA", repr(_loud))
 
 # --- 4. Автоопределение по JEDEC ID и работа без Unlock Bypass -----------------
 section("JEDEC ID и Unlock Bypass")
@@ -524,10 +535,12 @@ check("28F004S5 / 28F008S5: 8 и 16 блоков по 64 КиБ, 5 В, байт�
 
 # 2.18.2: добавлен B4h = 28F010 (Intel 290207-010, Intelligent Identifier);
 # кодов A1h/A3h/A4h (и «28F320 по A4h») нет ни в flashrom, ни в ядре - их нет.
+# 2.18.4: коды 12-вольтового первого поколения B8h/B9h/BDh тоже из даташитов.
 want_intel = {0xA0: "28F016SV", 0xA2: "28F008SA", 0xA6: "28F008S5",
-              0xA7: "28F004S5", 0xB4: "28F010"}
+              0xA7: "28F004S5", 0xB4: "28F010", 0xB8: "28F512",
+              0xB9: "28F256", 0xBD: "28F020"}
 got_intel = {k: v[0] for k, v in C.INTEL_PARTS.items()}
-check("Intel ID по двум источникам: A0h/A2h/A6h/A7h/B4h, без выдуманных A1h/B5h/B6h",
+check("Intel ID по даташитам: A0h/A2h/A6h/A7h/B4h/B8h/B9h/BDh, без выдуманных A1h/B5h/B6h",
       got_intel == want_intel, str(got_intel))
 
 # Реестр в JSON и модуль jedec_registry.py не должны разъезжаться: раньше
@@ -2899,6 +2912,91 @@ check("§5: у Intel 28F008SA/016SA назван Vpp 12 В",
       "12 V" in sec5 and "28F008SA" in sec5
       and "| Intel 28F010/28F020, 28F008SA, 28F016SA, M28F* | 5 V | **12 V** |" in sec5,
       sec5[:120])
+
+# --- 2.18.4: коды устройств Intel 12-вольтового поколения ------------------
+# Строки 28F256/28F512/28F020 знали команды (правильный CUI, стирание только
+# целиком, ro), но их Intelligent Identifier оставался null: набор не мог
+# назвать микросхему, которую видит на карте. Коды взяты из документов:
+#  * Intel 28F256A, order 290243-006: «A read from address 0001H outputs the
+#    device code (B9H)» (mfr 89H);
+#  * Intel 28F512, order 290204-008 (и A28F512 - 290265-004): device code B8H;
+#  * Intel 28F020, order 290245-009: device code BDH;
+#  * Intel 28F010, order 290207-010: device code B4H (появился в 2.18.2).
+# Побочный вывод: ходивший по таблицам код B5h для 28F020 - выдумка, у 28F020
+# BDh, поэтому B5h так и остаётся отсутствующим (см. проверку выше).
+# Карточная сверка: спецификация линейной карты C-ONE/Pretec на 28F010/28F020
+# говорит, что в word-wide режиме коды читаются как 8989H/B4B4H, а код
+# устройства - по адресу 0002H. Это ровно то, что делает read_id: команда
+# уходит словом из двух одинаковых байт, а читаются байты 0 и 2.
+section("2.18.4: Intel ID 12-вольтового поколения (B8h/B9h/BDh) в реестре и коде")
+
+bad = []
+for did, name in ((0xB4, "28F010"), (0xB8, "28F512"), (0xB9, "28F256"),
+                  (0xBD, "28F020")):
+    got_mono = D.vendor_part(0x89, did)
+    got_pkg = (C.INTEL_PARTS.get(did) or ("",))[0]
+    if not got_mono or got_mono[0] != name or got_pkg != name:
+        bad.append("%s: монолит %s, пакет %s" % (hex(did), got_mono, got_pkg))
+check("ID 89h/B4h/B8h/B9h/BDh -> имя в обеих реализациях", not bad,
+      str(bad[:4]))
+
+reg_intel = _reg_json.get("Intel") or {}
+bad = []
+for did, name, doc in ((0xB4, "28F010", "290207"), (0xB8, "28F512", "290204"),
+                       (0xB9, "28F256", "290243"), (0xBD, "28F020", "290245")):
+    info = reg_intel.get("0x%02X" % did) or {}
+    if info.get("chip") != name:
+        bad.append("%s: %s" % (hex(did), info.get("chip")))
+    elif doc not in str(info.get("source") or ""):
+        bad.append("%s: в источнике нет order %s" % (hex(did), doc))
+check("реестр: B4h/B8h/B9h/BDh с номером документа (order)", not bad,
+      str(bad[:4]))
+
+b5 = [w for w, t in (("пакет", C.INTEL_PARTS), ("монолит", D.INTEL_PARTS))
+      if 0xB5 in t]
+check("B5h по-прежнему отсутствует: у 28F020 код BDh", not b5, str(b5))
+
+# Коды доходят до модели через реестр: _id_values -> read_id.
+bad = []
+for name, want in (("28F256", (0x89, 0xB9)), ("28F512", (0x89, 0xB8)),
+                   ("28F020", (0x89, 0xBD))):
+    card, _bus, flash = NM.make(kit=KIT, chips=1, chip_name=name, blank=True)
+    got = flash.read_id()
+    if got != want:
+        bad.append("%s: %s вместо %s" % (name, got, want))
+check("модель: read_id даёт 89h/B9h, 89h/B8h, 89h/BDh", not bad, str(bad[:3]))
+
+# Пара чипов: команда 90h уходит СЛОВОМ из двух одинаковых байт (иначе один
+# чип команды не получит), ID читается - как в спецификации карты.
+card_p4, bus_p4, flash_p4 = NM.make(kit=KIT, chips=2, chip_name="28F512",
+                                    blank=True)
+log_p4 = _trace2(bus_p4)
+got_p4 = flash_p4.read_id()
+cmd_p4 = [d for a, d in log_p4 if d and d[0] == D.INTEL_CUI_READ_ID]
+check("пара чипов: 90h уходит словом 9090h, read_id даёт 89h/B8h",
+      got_p4 == (0x89, 0xB8) and cmd_p4 and all(len(d) == 2 and d[0] == d[1]
+                                                for d in cmd_p4),
+      (got_p4, cmd_p4))
+
+# Сквозной путь пакета: код прочитан -> имя названо -> честный отказ в работе
+# (строки ro: стираются только целиком и требуют 12 В на Vpp).
+bad = []
+for name in ("28F020", "28F512"):
+    card, _bus, flash = NM.make(kit=KIT, chips=1, chip_name=name, blank=True)
+    try:
+        C.identify_chip(flash, info={})
+        bad.append("%s: опознан, но набор согласился с ним работать" % name)
+    except C.UnsupportedChip as exc:
+        if name not in str(exc) or "только" not in str(exc):
+            bad.append("%s: %s" % (name, str(exc)[:60]))
+check("пакет: по ID опознаёт 28F020/28F512 и отказывает (только чтение)",
+      not bad, str(bad))
+
+# Имена в JSON и монолите должны совпадать и для новых кодов.
+diff = sorted(set((k, v[0]) for k, v in C.INTEL_PARTS.items())
+              ^ set((k, v[0]) for k, v in D.INTEL_PARTS.items()))
+check("Intel: таблицы пакета и монолита совпадают вместе с новыми кодами",
+      not diff, str(diff[:4]))
 
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)
