@@ -43,15 +43,15 @@
 
 ИЗ WINDOWS (PowerShell)
 -----------------------
-То же самое, только другой скрипт — remote_collect.ps1:
+То же самое, только другой скрипт — remote_collect.py:
 
     cd D:\pcmcia-flash-kit
-    .\remote_collect.ps1                                  # 192.168.0.94, root
-    .\remote_collect.ps1 -User alex                       # обычный пользователь
-    .\remote_collect.ps1 -HostName 192.168.0.94 -Port 2222
-    .\remote_collect.ps1 -KitDir 'D:\pcmcia-flash-kit'
-    .\remote_collect.ps1 -Image -PullImage                # + снять образ и забрать
-    .\remote_collect.ps1 -DryRun                          # только показать план
+    python remote_collect.py                                  # 192.168.0.94, root
+    python remote_collect.py --user alex                       # обычный пользователь
+    python remote_collect.py --host 192.168.0.94 --port 2222
+    python remote_collect.py --kit 'D:\pcmcia-flash-kit'
+    python remote_collect.py --image --pull-image                # + снять образ и забрать
+    python remote_collect.py --dry-run                          # только показать план
 
 Что нужно в Windows:
   * ssh и tar уже есть в Windows 10 1803+ и Windows 11.
@@ -60,7 +60,7 @@
   * на ноутбуке должен работать ssh-сервер.
 
 Три вещи, о которых стоит знать заранее (проверено):
-  1) адрес задаётся ключом -HostName, потому что $Host в PowerShell — это
+  1) адрес задаётся ключом --host, потому что $Host в PowerShell — это
      зарезервированная переменная (имя компьютера), а не адрес;
   2) пароль ssh спрашивает один раз за запуск (весь цикл уложен в один
      сеанс). Если хочется вообще без пароля — настройте ключ:

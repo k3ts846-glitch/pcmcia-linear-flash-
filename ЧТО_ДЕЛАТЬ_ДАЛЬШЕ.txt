@@ -13,7 +13,8 @@
      pcmcia-kit                    то же после `py -3 -m pip install .`
      оформление по стандарту       pyproject.toml, src-layout, [project.scripts],
                                    проверка стиля ruff, .gitignore
-     ни .cmd, ни .ps1 в рабочем пути; прежние сценарии — в windows/legacy/
+     ни .cmd, ни .ps1 в наборе нет вовсе (2.18.0); монолит разложен по
+                                   модулям src/pcmcia_direct
 
    Пульт:
      пункт 13 меню                 настройка входа по ключу (без пароля)

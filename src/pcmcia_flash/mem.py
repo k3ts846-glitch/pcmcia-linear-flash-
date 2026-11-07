@@ -360,7 +360,7 @@ class Mem:
         if not os.path.exists(path):
             raise DirectError(f"{path} нет — ядро без CONFIG_DEVMEM?")
         if os.geteuid() != 0 and path == "/dev/mem":
-            raise DirectError("нужен root: sudo python3 windows/legacy/pcmcia_direct.py ...")
+            raise DirectError("нужен root: sudo python3 pcmcia_direct.py ...")
         flags = (os.O_RDWR if writable else os.O_RDONLY) | os.O_SYNC
         try:
             self.fd = os.open(path, flags)

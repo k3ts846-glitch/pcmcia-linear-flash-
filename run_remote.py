@@ -143,7 +143,7 @@ def main() -> int:
         say("  терминала, чтобы не портить передачу файлов.")
         say("")
         say("  Три способа, любой на выбор:")
-        say("   1) войти на ноутбук под root:  .\\RUN.ps1 -HostName <адрес> -User root")
+        say("   1) войти на ноутбук под root:  python run_remote.py --host <адрес> --user root")
         say("   2) разрешить sudo без пароля для этого пользователя (на ноутбуке):")
         say("        echo '$USER ALL=(ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/pcmcia")
         say("   3) запустить набор прямо на ноутбуке: sudo python3 ./collect_all.py")

@@ -627,7 +627,7 @@ def main(argv=None):
         if kind in ("linear-flash", "memory", "ata"):
             print("  образ снимается: --read <файл> [--double]")
         elif kind == "unknown":
-            print("  карта не опознана: пришлите вывод windows/legacy/pcmcia_direct.py --cis")
+            print("  карта не опознана: пришлите вывод pcmcia_direct.py --cis")
         else:
             print("  это не носитель: читать можно паспорт, образ не нужен")
         return 0 if kind != "unknown" else 4
@@ -735,7 +735,7 @@ def main(argv=None):
                               f"карта 0x{inf_c['manfid'][1]:04x}")
                     print("  Это не linear flash: attribute memory у неё пуста,")
                     print("  и это нормально. Образ снимается тем же чтением:")
-                    print("    sudo python3 windows/legacy/pcmcia_direct.py --read card.bin --size auto")
+                    print("    sudo python3 pcmcia_direct.py --read card.bin --size auto")
                     print("  ВНИМАНИЕ: для ATA-карты образ - это дамп всего")
                     print("  диска; файловая система внутри (FAT) этим набором")
                     print("  НЕ разбирается.")
@@ -959,7 +959,7 @@ def main(argv=None):
             if found:
                 print(f"  окно {smp['start']:#010x}, строки: {', '.join(found[:6])}")
         print("\nСледующий шаг: снять образ целиком — "
-              "sudo python3 windows/legacy/pcmcia_direct.py --read card.bin --double")
+              "sudo python3 pcmcia_direct.py --read card.bin --double")
         return 0 if any_data else 3
     except DirectError as e:
         print(f"ОШИБКА: {e}", file=sys.stderr)

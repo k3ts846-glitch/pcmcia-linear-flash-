@@ -28,17 +28,15 @@
   pcmcia-kit.pyw                  тот же пульт С WINDOWS (двойной щелчок):
                                   файлы возит по scp, команды запускает по ssh,
                                   образ тащит обратно; окно с кнопками и журналом
-  windows/legacy/                 прежние .ps1 и .cmd: не используются, оставлены
-                                  на один выпуск как запасной вариант
+  src/pcmcia_direct/              код работы с картой (пакет, 14 модулей)
   КАК_УПРАВЛЯТЬ_С_WINDOWS.txt     шпаргалка: что набирать с Windows
   linux/setup_linear_flash.sh     настройка без меню (пакеты + окна lspci + Vpp)
   linux/flashcard.sh              команды по одной: info/ident/backup/write/verify
   debs/                           70 .deb для bookworm i386 + ВСЕ библиотеки (офлайн),
                                   включая python3-tk для GUI
                                   см. debs/INSTALL_OFFLINE.txt
-  windows/legacy/collect_pcmcia_info.bat диагностика из Windows (лежит
-                                  вместе с прочими прежними сценариями)
-  windows/card_dump.linux.sh      снять образ, пока карта стоит в Windows-ноутбуке
+  collect_all.py                  диагностика на ноутбуке (полный отчёт)
+  linux/card_dump_linux.py        снять образ, пока карта стоит в Windows-ноутбуке
   make_cpio.sh                    упаковать набор в cpio.gz (для initrd, по желанию)
   README_FIRST.txt                этот файл (кратко)
   ИНСТРУКЦИЯ.md                   ПОДРОБНАЯ инструкция: от записи на флешку
@@ -68,7 +66,7 @@
       python pcmcia-kit.pyw --text write -i card.bin   # отправить и записать
       python pcmcia-kit.pyw --text erase --yes
       python pcmcia-kit.pyw --text diag
-      (адрес/пользователь/порт/ключ: -HostName -User -Port -KeyFile)
+      (адрес/пользователь/порт/ключ: --host --user --port -KeyFile)
 
   Важно про запись: она идёт ТОЛЬКО через драйвер (/dev/mtdN). Если ядро не
   дало карте окно памяти ("unable to map card memory!"), писать нечем —
@@ -163,8 +161,8 @@
   Один отчёт для переписки:    sudo bash ./report.sh (или --step cis)
   С текущего компьютера по SSH: bash remote_collect.sh [адрес ноутбука]
                                 (сам зайдёт на ноутбук и принесёт отчёт)
-  Из Windows (PowerShell):      .\remote_collect.ps1 [-HostName адрес]
-                                (то же самое, ключ -DryRun для проверки)
+  Из Windows (PowerShell):      python remote_collect.py [--host адрес]
+                                (то же самое, ключ --dry-run для проверки)
                                 что нужно на Windows-машине:
                                 ЧТО_НУЖНО_НА_WINDOWS.txt
   Работа по SSH:               SSH_РАБОТА.txt     (по одной команде за раз)
@@ -396,5 +394,5 @@
   туда (на ноутбук):  файлы набора копируются по scp в /tmp/pcmcia-collect
   запуск:             одна команда ssh (в stdin ничего не идёт)
   обратно:            отчёт забирается по scp в otchet-<адрес>-<дата>.txt
-  образ (с -Image):   по scp в card-<адрес>-<дата>.bin, с проверкой md5
+  образ (с --image):   по scp в card-<адрес>-<дата>.bin, с проверкой md5
   после этого папка на ноутбуке убирается.

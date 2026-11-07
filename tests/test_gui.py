@@ -337,8 +337,8 @@ def t_direct_write():
           "возвращён на место" in src, "")
     check("кнопка пробы предупреждает, что вернуть может не удаться",
           "вернуть байты не удастся" in src, "")
-    check("кнопка пробы честно отказывает без windows/legacy/pcmcia_direct.py",
-          "нет windows/legacy/pcmcia_direct.py" in src, "")
+    check("кнопка пробы честно отказывает без pcmcia_direct.py",
+          "нет pcmcia_direct.py" in src, "")
 
     class FakeRunner:
         def __init__(self):
@@ -384,8 +384,8 @@ def t_direct_write():
         ops2.direct_probe()
         check("Ops: без pcmcia_direct.py проба падает с понятной ошибкой", False, "")
     except RuntimeError as e:
-        check("Ops: без windows/legacy/pcmcia_direct.py проба падает с понятной ошибкой",
-              "windows/legacy/pcmcia_direct.py" in str(e), str(e))
+        check("Ops: без pcmcia_direct.py проба падает с понятной ошибкой",
+              "pcmcia_direct.py" in str(e), str(e))
 
 
 def main():

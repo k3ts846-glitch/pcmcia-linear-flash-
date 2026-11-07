@@ -256,7 +256,7 @@ def t_sync():
     section("W3 синхронизация набора: уходят только изменившиеся файлы")
     kit = os.path.join(WORK, "kitcopy")
     os.makedirs(kit, exist_ok=True)
-    names = ["pcmcia_ctl.py", "windows/legacy/pcmcia_direct.py", "collect_all.py"]
+    names = ["pcmcia_ctl.py", "src/pcmcia_direct/version.py", "collect_all.py"]
     for index, name in enumerate(names):
         full = os.path.join(kit, name)
         os.makedirs(os.path.dirname(full), exist_ok=True)
@@ -273,17 +273,17 @@ def t_sync():
     check("изменившийся файл попадает в список",
           sync.changed_files(local, broken) == ["collect_all.py"], "")
     partial = dict(local)
-    del partial["windows/legacy/pcmcia_direct.py"]
+    del partial["src/pcmcia_direct/version.py"]
     check("файл, которого нет на ноутбуке, отправляется",
-          "windows/legacy/pcmcia_direct.py" in sync.changed_files(local, partial), "")
+          "src/pcmcia_direct/version.py" in sync.changed_files(local, partial), "")
     check("порядок отправки предсказуем (как в списке набора)",
           sync.changed_files(local, {}) == names, "")
     parsed = sync.parse_md5sum("0123456789abcdef0123456789abcdef  pcmcia_ctl.py\n"
-                               "ABCDEF0123456789ABCDEF0123456789 *windows/legacy/pcmcia_direct.py\n"
+                               "ABCDEF0123456789ABCDEF0123456789 *src/pcmcia_direct/version.py\n"
                                "мусор\n")
     check("вывод md5sum разбирается", len(parsed) == 2, str(parsed))
     check("сумма приводится к нижнему регистру",
-          parsed.get("windows/legacy/pcmcia_direct.py") == "abcdef0123456789abcdef0123456789", str(parsed))
+          parsed.get("src/pcmcia_direct/version.py") == "abcdef0123456789abcdef0123456789", str(parsed))
 
 
 def t_transport(bindir):
@@ -393,10 +393,10 @@ def t_cli(bindir, env):
           and "pcmcia_kit key" in result.stdout, result.stdout[-300:])
 
     reset_fakes("ok", remote_out="  микросхема : Am29F016\n  протокол команд : JEDEC\n")
-    work_before = os.path.getsize(os.path.join(KIT, "windows", "legacy", "pcmcia_direct.py"))
+    work_before = os.path.getsize(os.path.join(KIT, "src", "pcmcia_direct", "version.py"))
     result = run_cli(["chip", "--host", "192.168.0.255", "--kit-dir", KIT], env)
     check("chip не трогает файлы набора на этой машине",
-          os.path.getsize(os.path.join(KIT, "windows", "legacy", "pcmcia_direct.py")) == work_before, "")
+          os.path.getsize(os.path.join(KIT, "src", "pcmcia_direct", "version.py")) == work_before, "")
 
 
 def t_state():

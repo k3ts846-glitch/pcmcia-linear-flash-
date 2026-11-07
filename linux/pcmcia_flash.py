@@ -47,7 +47,7 @@ KIT = Path(__file__).resolve().parent
 if KIT.name == "linux" and (KIT / "..").is_dir():
     KIT = (KIT / "..").resolve()
 DEBS = KIT / "debs"
-DIRECT = KIT / "windows" / "legacy" / "pcmcia_direct.py"
+DIRECT = KIT / "pcmcia_direct.py"
 
 _IS_TTY = sys.stdout.isatty()
 C_B = "\033[36m" if _IS_TTY else ""
@@ -878,7 +878,7 @@ def do_diag() -> None:
         say("   2) Протереть контакты карты и вставить до щелчка.")
         say("   3) Прямое чтение attribute memory в обход ядра (самый быстрый ответ")
         say("      на вопрос «карта отвечает или нет»):")
-        say("        sudo python3 windows/legacy/pcmcia_direct.py --cis")
+        say("        sudo python3 pcmcia_direct.py --cis")
         say("      Читаются те же 4 КиБ, что и у ядра, но без проверки 'годности'.")
         say("      Кортежи/паспорт -> карта жива и отвечает, дело в окнах ядра.")
         say("      Сплошные 0xFF или 0x00 -> карта (или контакт) не отвечает.")
@@ -1228,7 +1228,7 @@ def main(argv: list[str] | None = None) -> int:
     if args and args[0] == "--selftest":
         ver = "?"
         try:
-            for line in (KIT / "windows" / "legacy" / "pcmcia_direct.py").read_text(encoding="utf-8").splitlines():
+            for line in (KIT / "src" / "pcmcia_direct" / "version.py").read_text(encoding="utf-8").splitlines():
                 if line.startswith("KIT_VERSION"):
                     # хвостовой комментарий отрезаем (было до 2.17.16
                     # «2.17.16"  # версия набора: ...»).

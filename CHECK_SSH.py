@@ -177,10 +177,10 @@ def main(argv: list[str] | None = None) -> int:
     head1("5. КОМАНДА ДЛЯ WINDOWS-МАШИНЫ")
     say("  Распакуйте архив на Windows-машине и запустите в PowerShell:")
     say("")
-    say(f"      .\\\\RUN.ps1 -HostName {first_ip} -Port {PORT}")
+    say(f"      python run_remote.py --host {first_ip} --port {PORT}")
     say("")
     say("  Если входите не root (а в настройках permitrootlogin no — только так):")
-    say(f"      .\\\\RUN.ps1 -HostName {first_ip} -User ВАШ_ЛОГИН")
+    say(f"      python run_remote.py --host {first_ip} --user ВАШ_ЛОГИН")
     say("")
     say("  Сначала можно проверить, ничего не подключая:  -DryRun")
     return 0

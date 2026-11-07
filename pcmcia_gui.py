@@ -978,9 +978,9 @@ class Ops:
 
     # ---------- запись МИМО ядра (нет /dev/mtdN)
     def direct_script(self):
-        """Путь к windows/legacy/pcmcia_direct.py рядом с программой."""
+        """Путь к pcmcia_direct.py рядом с программой."""
         here = os.path.dirname(os.path.abspath(__file__))
-        for cand in (os.path.join(here, "windows", "legacy", "pcmcia_direct.py"),
+        for cand in (os.path.join(here, "pcmcia_direct.py"),
                      os.path.join(here, "linux", "pcmcia_direct.py")):
             if os.path.exists(cand):
                 return cand
@@ -995,7 +995,7 @@ class Ops:
         """
         script = self.direct_script()
         if not script:
-            raise RuntimeError("рядом нет windows/legacy/pcmcia_direct.py - проба невозможна")
+            raise RuntimeError("рядом нет pcmcia_direct.py - проба невозможна")
         if self.card.simulated:
             raise RuntimeError("проба без драйвера на файле-тренажёре не имеет смысла")
         self.slow("проба записи: один сектор")
@@ -1013,7 +1013,7 @@ class Ops:
         """Записать образ без драйвера (команды JEDEC через окно моста)."""
         script = self.direct_script()
         if not script:
-            raise RuntimeError("рядом нет windows/legacy/pcmcia_direct.py - запись невозможна")
+            raise RuntimeError("рядом нет pcmcia_direct.py - запись невозможна")
         if self.card.simulated:
             raise RuntimeError("запись без драйвера на файле-тренажёре не имеет смысла")
         if not os.path.exists(path):

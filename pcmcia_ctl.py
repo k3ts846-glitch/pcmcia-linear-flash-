@@ -49,7 +49,9 @@ KIT = Path(__file__).resolve().parent
 if KIT.name == "linux" and (KIT / "..").is_dir():
     KIT = (KIT / "..").resolve()
 
-DIRECT = KIT / "windows" / "legacy" / "pcmcia_direct.py"
+# С 2.18.0 точка входа одна: pcmcia_direct.py в корне набора,
+# код - в пакете src/pcmcia_direct (папки windows/legacy больше нет).
+DIRECT = KIT / "pcmcia_direct.py"
 LOG_DEFAULT = KIT / "pcmcia_ctl.log"
 LOCK_FILE = KIT / ".pcmcia_ctl.lock"
 MTD = Path(os.environ.get("MTD", "/dev/mtd0"))
@@ -239,7 +241,7 @@ class CardState:
             if rc != 0 and self.vpp == "5":
                 self.cis_ok = True
         else:
-            self.cis_text = "(windows/legacy/pcmcia_direct.py не найден рядом — паспорт не прочитать)"
+            self.cis_text = "(pcmcia_direct.py не найден рядом — паспорт не прочитать)"
 
         if not self.cis_ok and self.cis_error:
             self.why = f"паспорт не удалось прочитать: {self.cis_error}"
@@ -943,7 +945,7 @@ def act_chip() -> int:
     if not need_root("chip"):
         return 2
     if not DIRECT.is_file():
-        err("нет windows/legacy/pcmcia_direct.py рядом")
+        err("нет pcmcia_direct.py рядом")
         return 2
     state = CardState(str(MTD), DIRECT)
     state.probe()
@@ -968,7 +970,7 @@ def act_fwprobe(state: CardState, assume_yes: bool = False) -> int:
     if not need_root("fwprobe"):
         return 2
     if not DIRECT.is_file():
-        err("нет windows/legacy/pcmcia_direct.py рядом")
+        err("нет pcmcia_direct.py рядом")
         return 2
     state.probe()
     sec("ПРОБА ЗАПИСИ БЕЗ ДРАЙВЕРА (один сектор, данные возвращаются)")
@@ -1006,7 +1008,7 @@ def act_fwwrite(state: CardState, img_path: str | None, assume_yes: bool = False
         err(f"нет файла {img_p}")
         return 2
     if not DIRECT.is_file():
-        err("нет windows/legacy/pcmcia_direct.py рядом")
+        err("нет pcmcia_direct.py рядом")
         return 2
     state.probe()
     sec(f"ЗАПИСЬ ОБРАЗА БЕЗ ДРАЙВЕРА ({img_p.name})")
