@@ -21,6 +21,7 @@ import contextlib as _ctx
 import io as _io
 import os
 import pathlib
+import re as _re
 import sys
 import tempfile
 import types as _types
@@ -426,8 +427,12 @@ for name in ("M28F002", "M28F004", "M5M29F400", "MBM29F002", "MBM29F004"):
         check("%s: отказ с подсказкой, а не умолчания" % name, False)
     except D.DirectError as exc:
         msg = str(exc)
+        # 2.17.24: у первых трёх причина своя («документа не нашли»), у
+        # MBM29F002/004 - общая про ревизию. В обоих случаях отказ обязан
+        # называть, что делать дальше.
         check("%s: отказ с подсказкой, а не умолчания" % name,
-              "ревизи" in msg and "Укажите" in msg, msg[:70])
+              ("документа на имя" in msg or "ревизи" in msg) and "Укажите" in msg,
+              msg[:70])
 
 # Стирание на модели: у MBM29F002BC первый сектор 16 КиБ, а у TC - 16 КиБ
 # ПОСЛЕДНИЙ; проверяем, что стирается именно он.
@@ -2201,6 +2206,55 @@ with _ctx.redirect_stdout(_buf_unv):
 check("пакет: в отчёте есть предупреждение «параметры не сверены»",
       "не сверены с даташитом" in _buf_unv.getvalue(),
       _buf_unv.getvalue()[-200:])
+
+# --- 29. «Документа не нашли» - не то же, что «такого имени нет» -------------
+# 2.17.24. У трёх строк (M28F002, M28F004, M5M29F400) не было своего why, и
+# отказ был общим: «ревизия не указана, укажите Am29F800BB для bottom-boot» -
+# для ST и Mitsubishi это просто неверно. Документа на сами имена найти не
+# удалось, поэтому причина теперь так и звучит: «документа на имя ... не
+# нашли» + как эта ёмкость называется у вендора. Утверждать «такого имени
+# нет» мы не можем - отсутствие документа не доказывает отсутствие детали.
+# Заодно убран мертвый дубль: M28F016S5 лежал И в GEOMETRY, И в WRONG_NAMES,
+# а подсказка проверяется раньше таблицы - строка была недостижима, но
+# попадала в --list и в сверку таблиц.
+section("пакет и монолит: «документа не нашли», а не «такого имени нет»")
+
+dup_mono = sorted(set(D.GEOMETRY) & set(D.WRONG_NAMES))
+dup_pkg = sorted(set(C.CHIP_GEOMETRY) & set(C.WRONG_NAMES))
+check("ни одно имя не лежит одновременно в таблице и в списке «нет в даташитах»",
+      not dup_mono and not dup_pkg, (dup_mono[:3], dup_pkg[:3]))
+
+# Подсказка обязана либо называть строку, которая в таблице есть (тогда
+# человек может сразу указать её в --chip), либо честно говорить, что такой
+# части в наборе нет. Обещать «вот правильное имя» и падать на нём нельзя.
+NOT_MODELLED = "в наборе"
+bad_hint = []
+for name, hint in sorted(D.WRONG_NAMES.items()):
+    tokens = {tok.upper() for tok in _re.findall(r"[A-Za-z0-9]+", hint)}
+    known = {c.upper() for c in D.GEOMETRY}
+    if not (tokens & known) and NOT_MODELLED not in hint.lower():
+        bad_hint.append(name)
+check("подсказка называет строку таблицы или говорит, что части в наборе нет",
+      not bad_hint, str(bad_hint))
+
+bad_msg = []
+for name in ("M28F002", "M28F004", "M5M29F400"):
+    for where, fn, err in (("монолит", lambda n: D.check_sector_map(
+                                D.geometry_for(n)), D.DirectError),
+                           ("пакет", C.geometry_for, C.UnsupportedChip)):
+        try:
+            fn(name)
+            bad_msg.append("%s/%s: открылся" % (name, where))
+        except Exception as exc:                            # noqa: BLE001
+            text = str(exc)
+            if "документа на имя" not in text or "Укажите" not in text:
+                bad_msg.append("%s/%s: %s" % (name, where, text[:60]))
+check("три имени без документа: отказ обеих реализаций говорит «документа не нашли»",
+      not bad_msg, str(bad_msg[:2]))
+
+check("M28F016S5 больше не строка таблицы, а подсказка",
+      "M28F016S5" not in D.GEOMETRY and "M28F016S5" in D.WRONG_NAMES
+      and "M28F016S5" not in C.CHIP_GEOMETRY)
 
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)
