@@ -50,13 +50,28 @@ REQUIRED = [
     "PCMCIA_LINEAR_FLASH_СПРАВОЧНИК.md",
     "tests/test_scripts.py", "tests/nor_model.py", "tests/test_v2.py",
     "tests/test_gui.py", "tests/test_ui_pro.py", "tests/test_win.py",
-    "windows/collect_pcmcia_info.bat",
+    # .bat вне windows/legacy в наборе нет с 2.16.0 (Windows-часть на Python);
+    # диагностический сценарий переехал в windows/legacy вместе с остальным.
+    "windows/legacy/collect_pcmcia_info.bat",
     "demo/01_карта.png",
 ]
 
 # Служебное: не должно попадать ни в исходники, ни в архив.
 JUNK_NAMES = {"__pycache__", ".card-state.txt", ".DS_Store"}
 JUNK_SUFFIX = (".pyc", ".pyo", ".orig", ".rej", ".bak", "~")
+
+# А вот ДЛЯ ПРОВЕРКИ дерева (check_tree) это разные вещи. Кэш Python и следы
+# работы набора появляются от любого запуска и убираются clean_junk() при
+# сборке - это не дефект (см. её docstring). Остатки правок в архив попасть не
+# должны - это дефект. До 2.17.16 check_tree валила сборку за __pycache__ и
+# .card-state.txt, то есть «собирать нельзя» было всегда.
+JUNK_CACHE_NAMES = {"__pycache__", ".pytest_cache", "build", "dist",
+                    ".card-state.txt", ".DS_Store"}
+JUNK_LEFTOVER_SUFFIX = (".orig", ".rej", ".bak", "~")
+
+# Где записана версия пакетов. В __init__.py литерала нет - там
+# `from ._version import __version__`.
+PACKAGES = ("src/pcmcia_kit/_version.py", "src/pcmcia_flash/_version.py")
 
 
 def md5(path):
@@ -68,18 +83,28 @@ def md5(path):
 
 
 def kit_version():
-    """Версия набора. Должна совпадать в трёх местах: pcmcia_direct.py (работа
-    с картой), src/pcmcia_kit/__init__.py (пакет) и pyproject.toml берёт её
-    оттуда же."""
+    """Версия набора из KIT_VERSION (pcmcia_direct.py) - единственный источник.
+
+    Совпадать с ней обязаны: src/pcmcia_kit/_version.py, src/pcmcia_flash/
+    _version.py (у пакетов своя запись) и подсказка в collect_all.py.
+    pyproject.toml версию не хранит, а берёт из пакета (attr)."""
     text = open(os.path.join(KIT, "windows", "legacy", "pcmcia_direct.py"), encoding="utf-8").read()
     m = re.search(r'^KIT_VERSION = "([^"]+)"', text, re.M)
     return m.group(1) if m else None
 
 
-def package_version():
-    """Версия пакета пульта."""
-    path = os.path.join(KIT, "src", "pcmcia_kit", "__init__.py")
-    text = open(path, encoding="utf-8").read()
+def package_version(rel=PACKAGES[0]):
+    """Версия пакета из его _version.py (по умолчанию - пульт pcmcia_kit).
+
+    Литерал лежит именно там: в __init__.py его нет (там
+    `from ._version import __version__`). Прежний поиск по __init__.py всегда
+    возвращал None, и сборка сообщала «нет __version__», хотя версия была.
+    """
+    path = os.path.join(KIT, rel)
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as handle:
+        text = handle.read()
     m = re.search(r'^__version__ = "([^"]+)"', text, re.M)
     return m.group(1) if m else None
 
@@ -134,12 +159,13 @@ def check_tree():
         elif m.group(1) != ver:
             problems.append(f"{name}: версия {m.group(1)}, а набор {ver}")
 
-    # 1б. версия пакета пульта совпадает с версией набора
-    pkg = package_version()
-    if not pkg:
-        problems.append("нет __version__ в src/pcmcia_kit/__init__.py")
-    elif pkg != ver:
-        problems.append(f"версия пакета {pkg}, а набора {ver}")
+    # 1б. версия КАЖДОГО пакета совпадает с версией набора
+    for rel in PACKAGES:
+        pkg = package_version(rel)
+        if not pkg:
+            problems.append("нет __version__ в " + rel)
+        elif pkg != ver:
+            problems.append(f"{rel}: версия {pkg}, а набора {ver}")
 
     # 1в. в рабочем пути нет .cmd/.bat/.ps1: Windows-часть на Python
     for name in sorted(os.listdir(KIT)):
@@ -151,15 +177,16 @@ def check_tree():
         if not os.path.exists(os.path.join(KIT, rel)):
             problems.append("нет обязательного файла " + rel)
 
-    # 3. мусор в исходниках
+    # 3. мусор в исходниках. Кэш Python и следы работы набора - не дефект:
+    # их убирает clean_junk() при сборке. Дефект - остатки правок (.orig,
+    # .rej, .bak, ~): они уехали бы в архив. И в .git не ходим: там своё.
     for root, dirs, files in os.walk(KIT):
-        for d in list(dirs):
-            if d in JUNK_NAMES:
-                problems.append("мусор в исходниках: " + os.path.join(root, d))
-                dirs.remove(d)
+        dirs[:] = [d for d in dirs
+                   if d not in JUNK_CACHE_NAMES and d != ".git"]
         for f in files:
-            if f in JUNK_NAMES or f.endswith(JUNK_SUFFIX):
-                problems.append("мусор в исходниках: " + os.path.join(root, f))
+            if f.endswith(JUNK_LEFTOVER_SUFFIX):
+                problems.append("остаток правки в исходниках: "
+                                + os.path.join(root, f))
     return problems
 
 
@@ -254,7 +281,8 @@ def verify_tar():
     problems = []
     with tarfile.open(TAR_PATH) as tf:
         names = tf.getnames()
-    for rel in ("debs/INSTALL_OFFLINE.txt", "windows/collect_pcmcia_info.bat",
+    for rel in ("debs/INSTALL_OFFLINE.txt",
+                "windows/legacy/collect_pcmcia_info.bat",
                 "demo/01_карта.png", "tests/test_scripts.py", "tests/test_win.py",
                 "src/pcmcia_kit/cli.py", "pyproject.toml", "pcmcia-kit.pyw",
                 "PCMCIA_LINEAR_FLASH_СПРАВОЧНИК.md", "README.md"):

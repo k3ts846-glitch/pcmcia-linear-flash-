@@ -281,11 +281,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         for line in pcmcia_direct.read_text(encoding="utf-8").splitlines():
             if line.startswith("KIT_VERSION"):
-                kit_version = line.split("=", 1)[1].strip().strip('"')
+                # отрезать хвостовой комментарий, иначе версия уедет
+                # вместе с ним (было до 2.17.16).
+                kit_version = line.split("=", 1)[1].split("#", 1)[0].strip().strip('"')
                 break
     except OSError:
         pass
-    say(f"  версия набора: {kit_version}   (в переписке должна быть 2.17.15)")
+    say(f"  версия набора: {kit_version}   (в переписке должна быть 2.17.16)")
     try:
         md5_direct = subprocess.run(
             ["md5sum", str(pcmcia_direct)], capture_output=True, text=True

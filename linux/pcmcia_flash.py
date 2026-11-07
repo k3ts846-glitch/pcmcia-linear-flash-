@@ -1230,7 +1230,9 @@ def main(argv: list[str] | None = None) -> int:
         try:
             for line in (KIT / "windows" / "legacy" / "pcmcia_direct.py").read_text(encoding="utf-8").splitlines():
                 if line.startswith("KIT_VERSION"):
-                    ver = line.split("=", 1)[1].strip().strip('"')
+                    # хвостовой комментарий отрезаем (было до 2.17.16
+                    # «2.17.16"  # версия набора: ...»).
+                    ver = line.split("=", 1)[1].split("#", 1)[0].strip().strip('"')
                     break
         except OSError:
             pass

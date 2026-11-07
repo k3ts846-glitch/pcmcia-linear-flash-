@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.15"          # версия набора: печатается в отчёте и в --selftest
+KIT_VERSION = "2.17.16"          # версия набора: печатается в отчёте и в --version
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -5598,6 +5598,9 @@ def _flash_report(parts, extra_lines=()):
     chips, size = parts["chips"], parts["size"]
     geo = parts.get("geo") or {}
     cmd = geo.get("cmd") or (NOR_CMD_ADDR1, NOR_CMD_ADDR2)
+    # Версия набора - первой строкой отчёта: по ней видно, каким выпуском
+    # снят отчёт (его просят присылать вместе с выводом).
+    print(f"  версия набора         : {KIT_VERSION}")
     print(f"  микросхема            : {geo.get('name', 'неизвестная')} "
           f"({geo.get('how', '?')})")
     vol = geo.get("volts")
@@ -5916,6 +5919,13 @@ def main(argv=None):
                "сектор 16/32/64/128 КиБ, 1..8 чипов): тип определяется по "
                "паспорту и ответу самой микросхемы, при сомнении - --chip. "
                "Напряжение программирования (Vpp) не выставляется никогда.")
+    # --version: версия набора. До 2.17.16 ключа не было ни здесь, ни в отчёте,
+    # хотя комментарий у KIT_VERSION обещал печать «в отчёте и в --selftest»:
+    # --selftest есть у linux/pcmcia_flash.py и подкомандой у пульта, а у самого
+    # pcmcia_direct.py его нет.
+    ap.add_argument("--version", action="version",
+                    version=f"pcmcia_direct.py {KIT_VERSION}"
+                            " (набор pcmcia-linear-flash)")
     ap.add_argument("--probe", action="store_true", help="только проверить доступ")
     ap.add_argument("--cis", action="store_true",
                     help="прочитать CIS через attribute memory (паспорт карты)")

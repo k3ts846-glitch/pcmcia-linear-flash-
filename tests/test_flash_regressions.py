@@ -1735,6 +1735,140 @@ check("28F512 (модель): причина - «не выполняется», 
 
 
 
+# --- 23. Версия набора: --version, отчёт, читатели, tests/release.py -------
+# Аудит 2.17.16 (всё проверено запуском, а не чтением):
+#  * у монолита не было --version, хотя комментарий у KIT_VERSION обещал печать
+#    версии «в отчёте и в --selftest»;
+#  * в отчёте о карте версии не было, хотя её просят присылать вместе с выводом;
+#  * пять мест читают KIT_VERSION из текста и брали строку ЦЕЛИКОМ вместе с
+#    хвостовым комментарием: пульт показывал «2.17.15"   # версия набора: ...»;
+#  * tests/release.py не мог пройти никогда: искал __version__ в __init__.py
+#    (там литерала нет, только `from ._version import __version__`), требовал
+#    windows/collect_pcmcia_info.bat (переехал в windows/legacy в 2.16.0) и
+#    считал дефектом кэш Python, который сам же убирает при сборке.
+section("версия набора: --version, отчёт, читатели, tests/release.py")
+
+import importlib.util as _ilu                                       # noqa: E402
+import shutil as _sh                                                # noqa: E402
+import subprocess as _sp                                            # noqa: E402
+
+ver = D.KIT_VERSION
+direct = os.path.join(KIT, "windows", "legacy", "pcmcia_direct.py")
+
+_run = _sp.run([sys.executable, "-B", direct, "--version"],
+               capture_output=True, text=True)
+check("pcmcia_direct.py --version: код 0, в выводе имя и версия",
+      _run.returncode == 0 and ver in _run.stdout
+      and "pcmcia_direct.py" in _run.stdout,
+      (_run.returncode, _run.stdout[:60], _run.stderr[:60]))
+
+_run_help = _sp.run([sys.executable, "-B", direct, "--help"],
+                    capture_output=True, text=True)
+check("pcmcia_direct.py --help показывает ключ --version",
+      "--version" in _run_help.stdout, _run_help.stdout[:80])
+
+_run_pkg = _sp.run([sys.executable, "-B", "-c",
+                    "import sys; sys.path.insert(0, 'src'); "
+                    "from pcmcia_flash.cli import main; main(['--version'])"],
+                   capture_output=True, text=True, cwd=KIT)
+check("пакетный двойник pcmcia_flash --version: код 0 и та же версия",
+      _run_pkg.returncode == 0 and ver in _run_pkg.stdout,
+      (_run_pkg.returncode, _run_pkg.stdout[:60], _run_pkg.stderr[:80]))
+
+_parts = {"geo": D.geometry_for("MX29F1610", size=2 << 20), "chips": 1,
+          "size": 2 << 20, "how": "тест",
+          "win": {"start": 0xC0000, "size": 4 << 20},
+          "bus": _types.SimpleNamespace(span=8192)}
+_buf_ver = _io.StringIO()
+with _ctx.redirect_stdout(_buf_ver):
+    D._flash_report(_parts)
+_first = _buf_ver.getvalue().splitlines()[0]
+check("отчёт о карте начинается строкой с версией набора",
+      ver in _first and "версия" in _first, _first[:70])
+
+from pcmcia_flash import _version as _pver                          # noqa: E402
+from pcmcia_flash import cli as _pcli                               # noqa: E402
+from pcmcia_kit import _version as _kver                            # noqa: E402
+from pcmcia_kit import cli as _kcli                                 # noqa: E402
+
+_buf_pkg = _io.StringIO()
+with _ctx.redirect_stdout(_buf_pkg):
+    _pcli._flash_report(_parts)
+check("пакетный отчёт тоже называет версию",
+      ver in _buf_pkg.getvalue().splitlines()[0], _buf_pkg.getvalue()[:70])
+
+check("версия одна: KIT_VERSION, оба _version.py и читатель пульта",
+      _pver.__version__ == ver and _kver.__version__ == ver
+      and _kcli.kit_version(KIT) == ver,
+      (_pver.__version__, _kver.__version__, _kcli.kit_version(KIT)))
+
+_greedy = '.split("=", 1)[1].strip()'
+_readers = ["collect_all.py", "pcmcia_ctl.py", "linux/pcmcia_flash.py",
+            "src/pcmcia_kit/cli.py", "windows/legacy/pcmcia_win.py"]
+_left = [rel for rel in _readers
+         if _greedy in (pathlib.Path(KIT) / rel).read_text(encoding="utf-8")]
+check("читатели KIT_VERSION отрезают хвостовой комментарий (%d файлов)"
+      % len(_readers), not _left, str(_left))
+
+_spec = _ilu.spec_from_file_location("_rel",
+                                     os.path.join(KIT, "tests", "release.py"))
+_rel = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_rel)
+check("tests/release.py: package_version находит версию (было None)",
+      _rel.package_version() == ver
+      and _rel.package_version(_rel.PACKAGES[1]) == ver,
+      (_rel.package_version(), _rel.package_version(_rel.PACKAGES[1])))
+
+_probs = _rel.check_tree()
+check("tests/release.py: check_tree на рабочем дереве чист", _probs == [],
+      str(_probs[:3]))
+
+_rel_text = (pathlib.Path(KIT) / "tests" / "release.py").read_text(encoding="utf-8")
+check("tests/release.py: обязательный .bat - в windows/legacy, старого пути нет",
+      "windows/legacy/collect_pcmcia_info.bat" in _rel.REQUIRED
+      and "windows/collect_pcmcia_info.bat" not in _rel.REQUIRED
+      and '"windows/collect_pcmcia_info.bat"' not in _rel_text)
+
+_run_rel = _sp.run([sys.executable, "-B", "tests/release.py"],
+                   capture_output=True, text=True, cwd=KIT)
+check("tests/release.py как программа: код 0 и «проверки до сборки пройдены»",
+      _run_rel.returncode == 0 and "проверки до сборки пройдены" in _run_rel.stdout,
+      (_run_rel.returncode, _run_rel.stdout[-80:], _run_rel.stderr[-80:]))
+
+_fake = tempfile.mkdtemp(prefix="relkit-")
+try:
+    for rel, text in (("windows/legacy/pcmcia_direct.py",
+                       'KIT_VERSION = "%s"\n' % ver),
+                      ("collect_all.py",
+                       "x = '(в переписке должна быть %s)'\n" % ver),
+                      ("src/pcmcia_kit/_version.py", '__version__ = "%s"\n' % ver),
+                      ("src/pcmcia_flash/_version.py", '__version__ = "%s"\n' % ver)):
+        target = os.path.join(_fake, rel)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write(text)
+    os.makedirs(os.path.join(_fake, "__pycache__"))
+    with open(os.path.join(_fake, "__pycache__", "x.pyc"), "w") as handle:
+        handle.write("x")
+    with open(os.path.join(_fake, ".card-state.txt"), "w") as handle:
+        handle.write("state")
+    with open(os.path.join(_fake, "left.orig"), "w") as handle:
+        handle.write("old")
+    _old_kit = _rel.KIT
+    _rel.KIT = _fake
+    try:
+        _fake_probs = _rel.check_tree()
+    finally:
+        _rel.KIT = _old_kit
+finally:
+    _sh.rmtree(_fake, ignore_errors=True)
+_junk = [p for p in _fake_probs if "__pycache__" in p or ".card-state.txt" in p]
+_leftover = [p for p in _fake_probs if p.endswith("left.orig")]
+check("кэш Python - не дефект, остаток правки (.orig) - дефект",
+      not _junk and bool(_leftover), (_junk[:2], _leftover[:2]))
+
+
+
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)
 print("ИТОГО: прошло %d, провалено %d" % (len(PASS), len(FAIL)))

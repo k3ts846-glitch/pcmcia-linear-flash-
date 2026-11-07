@@ -262,7 +262,9 @@ class CardState:
         try:
             for line in self.direct.read_text(encoding="utf-8").splitlines():
                 if line.startswith("KIT_VERSION"):
-                    version = line.split("=", 1)[1].strip().strip('"')
+                    # без отрезания хвостового комментария версия уезжает
+                    # вместе с ним (было до 2.17.16).
+                    version = line.split("=", 1)[1].split("#", 1)[0].strip().strip('"')
                     break
         except OSError:
             pass

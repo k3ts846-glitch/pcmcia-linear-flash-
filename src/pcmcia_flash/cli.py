@@ -37,6 +37,7 @@ from .mem import (
 )
 from .nor_flash import NorFlash, NorBus
 from .power import check_vpp_state, set_vpp_for_write
+from ._version import __version__
 
 # --- мост / окно --------------------------------------------------------------
 
@@ -150,6 +151,8 @@ def _flash_report(parts, extra_lines=()):
     chips, size = parts["chips"], parts["size"]
     geo = parts.get("geo") or {}
     cmd = geo.get("cmd") or (NOR_CMD_ADDR1, NOR_CMD_ADDR2)
+    # Версия набора - первой строкой отчёта (как в монолите).
+    print(f"  версия набора         : {__version__}")
     print(f"  микросхема            : {geo.get('name', 'неизвестная')} "
           f"({geo.get('how', '?')})")
     vol = geo.get("volts")
@@ -475,6 +478,11 @@ def main(argv=None):
                "сектор 16/32/64/128 КиБ, 1..8 чипов): тип определяется по "
                "паспорту и ответу самой микросхемы, при сомнении - --chip. "
                "Напряжение программирования (Vpp) не выставляется никогда.")
+    # --version: версия набора (см. 2.17.16). Ключа не было, хотя версия
+    # печатается в отчёте и её же показывает пакет pcmcia_kit.
+    ap.add_argument("--version", action="version",
+                    version=f"pcmcia_flash {__version__}"
+                            " (набор pcmcia-linear-flash)")
     ap.add_argument("--probe", action="store_true",
                     help="только проверить доступ")
     ap.add_argument("--cis", action="store_true",

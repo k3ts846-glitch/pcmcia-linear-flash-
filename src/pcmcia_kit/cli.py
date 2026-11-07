@@ -146,7 +146,10 @@ def kit_version(directory):
         with open(path, encoding="utf-8") as handle:
             for line in handle:
                 if line.startswith("KIT_VERSION"):
-                    return line.split("=", 1)[1].strip().strip('"')
+                    # без отрезания комментария версия уезжает вместе
+                    # с ним: было «2.17.16"  # версия набора: ...».
+                    value = line.split("=", 1)[1].split("#", 1)[0]
+                    return value.strip().strip('"')
     except OSError:
         pass
     return "?"
