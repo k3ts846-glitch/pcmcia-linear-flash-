@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.13"          # версия набора: печатается в отчёте и в --selftest
+KIT_VERSION = "2.17.14"          # версия набора: печатается в отчёте и в --selftest
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -4118,15 +4118,27 @@ class NorFlashIO:
         return chip_abs(local, 0, self.chips)
 
     def _send(self, local, value):
-        """Послать команду value по адресу команды local (внутри чипа 0).
+        """Послать команду value по адресу команды local - КАЖДОМУ чипу карты.
 
-        У Intel 28F команда - слово: те же два байта пишутся ДВАЖДЫ (в оба
-        байта 16-битной шины), иначе микросхема примет это за данные. Это
-        тонкость, на которой легко ошибиться: 0x5555 и 0x555 - разные адреса.
+        У каждого чипа СВОЙ командный регистр, поэтому на карте из двух x8
+        команда должна дойти до обоих. Делается это одним словом: байт
+        команды дублируется в оба байта (Infineon KBA203626 «Connecting
+        2x8-bit Parallel NOR Flash Devices to MCU»: «commands must be written
+        in parallel to each 1x8 flash device ... flash command cycles must be
+        duplicated within the 2B word that is sent to a word address, with one
+        copy of the command cycle data in the low byte and one copy ... in the
+        high byte»; в Linux MTD то же самое делает cfi_build_cmd из
+        drivers/mtd/chips/cfi_util.c - размножает байт команды по всем чипам
+        слова, а адрес считает как cmd_ofs * interleave).
+
+        Было до 2.17.14: bytes([value, value]) только при wide=True. У пары
+        x8-чипов wide=False, поэтому ВСЕ команды (AAh/55h/80h/A0h/30h/20h)
+        уходили в чип 0, а данные - в оба. Чип 1 команд не видел, набор при
+        этом отчитывался об успехе: на реальной карте не программировались
+        нечётные байты, а сектор в чипе 1 не стирался.
         """
-        data = bytes([value, value]) if self.wide else bytes([value])
-        self.bus.wr_many(self.cmd_addr(local), data)
-
+        n = self.chips if self.chips > 1 else (2 if self.wide else 1)
+        self.bus.wr_many(self.cmd_addr(local), bytes([value] * n))
     # --- чтение массива ----------------------------------------------------
     def read(self, card_off, n=1):
         return self.bus.rd_block(card_off, n)
@@ -4425,6 +4437,12 @@ class NorFlashProgramming:
             return self._intel_program(card_off, value)
         if self.wide:
             return self.program_word(card_off, value)
+        if self.chips > 1:
+            # 16-битная карта из двух x8-чипов: одиночный байт писать нельзя.
+            # После A0h микросхема ЖДЁТ данные, и чип, которому байт не
+            # достался, остался бы в этом состоянии (следующая AAh ушла бы в
+            # него как данные). Пишем слово: свой байт и соседний - как есть.
+            return self.program_word(card_off, value)
         before = self.read_byte(card_off)
         if before == value:
             return True, ""
@@ -4479,11 +4497,16 @@ class NorFlashProgramming:
         return True, ""
 
     def program_word(self, card_off, value=None):
-        """Записать СЛОВО, в котором лежит байт card_off (у Intel - так).
+        """Записать СЛОВО, в котором лежит байт card_off.
 
-        Второй байт слова не трогаем: он остаётся таким, каким был (обычно
-        0xFF после стирания). Нужен ровно один сценарий - «записать этот
-        байт», поэтому значение берётся из card_off, а пара читается заранее.
+        Так пишет Intel (команда и данные у него - слово) и так приходится
+        писать на карте из двух x8-чипов: после A0h микросхема ЖДЁТ данные, и
+        чип, которому байт не достался, остался бы в этом состоянии - а
+        следующая AAh разблокировки попала бы в него как ДАННЫЕ (Infineon
+        KBA203626: команда и данные должны идти парой в одном слове).
+        Второй байт слова не портится: он пишется таким, каким был (0xFF после
+        стирания, а запись в NOR умеет только 1 -> 0, поэтому уже записанный
+        байт не меняется).
         """
         refuse = self._readonly("запись")
         if refuse:
@@ -4491,21 +4514,63 @@ class NorFlashProgramming:
         pair_at = card_off - (card_off % 2)
         before = self.read_byte(card_off)
         value = before if value is None else value
+        if before == value:
+            return True, ""
         if before != 0xFF and before != value:
             return False, f"байт не стёрт ({before:#04x}) — нужна чистка сектора"
-        data = bytearray([self.read_byte(pair_at), self.read_byte(pair_at + 1)])
+        if self.chips > 1:
+            data = bytearray(self.read_byte(pair_at + c) for c in range(self.chips))
+        else:
+            # Одиночная 16-битная микросхема: «слово» - два байта ОДНОЙ ячейки.
+            data = bytearray([self.read_byte(pair_at), self.read_byte(pair_at + 1)])
         data[card_off - pair_at] = value
-        self.unlock()
+        if self.bypass and not self._bypass_broken:
+            # Автовход в Unlock Bypass: первая запись открывает сеанс, дальше
+            # A0h + слово за два цикла. Если микросхема 20h не знает (JEDEC ID
+            # у семейства один, а команда есть только у поздних ревизий),
+            # откатываемся на обычную запись - один раз, с предупреждением.
+            if not self._bypass_active:
+                self.enter_bypass()
+                self._bypass_active = True
+            ok_b, why_b = self._word_write(pair_at, data, card_off, value)
+            if ok_b:
+                return True, ""
+            self.exit_bypass()
+            self._bypass_active = False
+            self._bypass_broken = True
+            print("  ВНИМАНИЕ: Unlock Bypass (20h) не сработал: " + why_b
+                  + ". Дальше пишу обычной командой A0h - медленнее, но верно.")
+        return self._word_write(pair_at, data, card_off, value)
+
+    def _word_write(self, pair_at, data, card_off, value):
+        """Один цикл записи слова: (разблокировка) -> A0h -> слово -> опрос.
+
+        В bypass циклы AAh/55h не разблокировка, а ДАННЫЕ: посылать их там
+        нельзя, иначе в буфер чипа уедет мусор. Поэтому разблокировка - только
+        когда bypass не активен.
+        """
+        if not self._bypass_active:
+            self.unlock()
         self._send(self.cmd1, NOR_PROGRAM)
         self.bus.wr_many(pair_at, bytes(data))
         ok, why = self._wait_program(card_off, value)
         if not ok:
             return False, why
-        got = self.read_byte(card_off)
-        if got != value:
-            return False, f"после записи читается {got:#04x} вместо {value:#04x}"
+        if self.chips > 1:
+            # Статус у чипов пары НЕ синхронизирован (Infineon KBA203626):
+            # каждый чип надо опросить отдельно.
+            for c in range(self.chips):
+                if pair_at + c == card_off:
+                    continue
+                ok2, why2 = self._wait_program(pair_at + c, data[c])
+                if not ok2:
+                    return False, f"чип {c}, слово {pair_at:#x}: {why2}"
+        for c in range(len(data)):
+            got = self.read_byte(pair_at + c)
+            if got != data[c]:
+                return False, (f"после записи читается {got:#04x} вместо "
+                               f"{data[c]:#04x} по адресу {pair_at + c:#x}")
         return True, ""
-
     def program_page(self, card_off, data):
         """Записать страницу программирования (до page байт) одной командой.
 
@@ -4765,20 +4830,25 @@ class NorFlashProgramming:
 
     # --- Intel 28F: CUI (свой набор команд со статусным регистром) ---------
     def _intel_send(self, chip, op, addr_local=None):
-        """Послать команду CUI в конкретный чип: (адрес, данные).
+        """Послать команду CUI. Команда действует на КАРТУ, а не на один чип.
 
-        Адрес и данные у Intel - СЛОВО: 0x2020 при стирании, 0x7070 при
-        чтении статуса. Поэтому байтовое смещение удваивается, а данные
-        дублируются в оба байта.
+        Обе микросхемы пары должны быть в одном режиме (иначе чтение статуса
+        одной переводит вторую в режим статуса), поэтому команда пишется
+        словом - по байту на чип, - и всегда по адресу чипа 0.
+
+        Было до 2.17.14: base = chip_abs(addr_local, chip). Для chip=1 это
+        два байта со СДВИГОМ (адреса 1 и 2): первый - команда чипу 1, второй -
+        та же команда чипу 0, но по ДРУГОМУ адресу. Для 70h это переводило
+        чип 0 в режим статуса на смещённом адресе, и чтение массива из чипа 0
+        начинало отдавать байты статуса.
         """
-        base = chip_abs(addr_local or 0, chip, self.chips)
+        base = chip_abs(addr_local or 0, 0, self.chips)
         # Ровно по байту на чип пары: у карты с ДВУМЯ чипами это два байта
         # (команда доходит до обоих), у карты с ОДНИМ - один байт. Прежнее
         # bytes([op, op]) на одном чипе давало команду, а следом уже данные
         # (40h как данные) - запись уезжала в мусор.
         self.bus.wr_many(base, bytes([op] * max(self.chips, 1)))
         return base
-
     def _intel_word_base(self, card_off):
         """(адрес начала СЛОВА, номер чипа внутри слова) для байта card_off.
 
@@ -4878,11 +4948,16 @@ class NorFlashErase:
     def erase_sector(self, card_off):
         """Стереть сектор, содержащий card_off. Возвращает (ok, почему).
 
-        ВАЖНО (нашлось на модели, а не на карте): стирать надо В КАЖДОМ чипе
-        пары отдельно. Команда 30h действует на тот чип, к которому попал её
-        адрес: байт с чётным смещением уходит в чип 0, с нечётным - в чип 1.
-        Если послать одну команду по чётному адресу, второй чип не сотрётся,
-        и запись в нечётные байты провалится с «байт не стёрт».
+        ВАЖНО: команды надо послать КАЖДОМУ чипу пары - у каждого чипа свой
+        командный регистр (Infineon KBA203626; Linux MTD cfi_build_cmd
+        размножает байт команды по чипам слова). Поэтому вся
+        последовательность идёт через _send(), а 30h пишется словом: один
+        цикл стирает сектор в ОБОИХ чипах. Статус потом опрашивается по
+        каждому чипу отдельно - он у пары не синхронизирован.
+
+        Раньше здесь был цикл «на каждый чип», но unlock()/80h всё равно
+        уходили только в чип 0: чип 1 получал один 30h без 80h/AAh/55h и
+        стирание игнорировал.
         """
         refuse = self._readonly("стирание сектора")
         if refuse:
@@ -4893,28 +4968,34 @@ class NorFlashErase:
         # base - АБСОЛЮТНОЕ смещение; чипу нужен адрес ВНУТРИ него, поэтому
         # сначала переводим в байты чипа, и только потом раскладываем по чипам.
         local = chip_local(base, self.chips)
+        self.unlock()
+        self._send(self.cmd1, NOR_ERASE_SETUP)
+        self.unlock()
+        # Шестой цикл - 30h ПО АДРЕСУ СЕКТОРА (даташит, «Sector Erase Command
+        # Sequence»; так же делают flashrom: issuecmd(0x30, page) и ядро
+        # Linux: map_write(map, cfi->sector_erase_cmd, adr)). Раньше здесь
+        # стояло _send(self.cmd1, ...) + wr(addr, 0xFF): команда уходила в
+        # 0x555, то есть ВСЕГДА стирала сектор 0.
+        if self.chips > 1:
+            self.bus.wr_many(chip_abs(local, 0, self.chips),
+                             bytes([NOR_ERASE_SECTOR] * self.chips))
+        else:
+            self.bus.wr(chip_abs(local, 0, self.chips), NOR_ERASE_SECTOR)
         for chip in range(self.chips):
-            addr = chip_abs(local, chip, self.chips)
-            self.unlock()
-            self._send(self.cmd1, NOR_ERASE_SETUP)
-            self.unlock()
-            # Шестой цикл - 30h ПО АДРЕСУ СЕКТОРА (даташит, «Sector Erase
-            # Command Sequence»; так же делают flashrom: issuecmd(0x30, page)
-            # и ядро Linux: map_write(map, cfi->sector_erase_cmd, adr)).
-            # Раньше здесь стояло _send(self.cmd1, ...) + wr(addr, 0xFF):
-            # команда уходила в 0x555, то есть ВСЕГДА стирала сектор 0.
-            self.bus.wr(addr, NOR_ERASE_SECTOR)
-            ok, why = self._wait_erase(addr)
+            ok, why = self._wait_erase(chip_abs(local, chip, self.chips))
             if not ok:
                 self.reset()
                 return False, f"чип {chip}, сектор {base:#x}: {why}"
         return True, ""
-
     def erase_chip(self):
         """Стереть чипы целиком. У Intel 28F команды «стереть всё» НЕТ.
 
         В таблице 9 документа её нет: только пошаговое стирание блоков.
         Поэтому здесь честный отказ, а не «попробуем 10h и посмотрим».
+
+        У JEDEC последовательность одна на карту (команды через _send() идут
+        каждому чипу, 10h - словом), а готовность опрашивается по каждому
+        чипу: у пары она не синхронизирована.
         """
         refuse = self._readonly("стирание чипа")
         if refuse:
@@ -4922,17 +5003,16 @@ class NorFlashErase:
         if self.protocol == "intel":
             return False, ("у Intel 28F008SA нет команды «стереть весь чип»: "
                            "стирать нужно поблочно (это и делает обычная запись)")
+        self.unlock()
+        self._send(self.cmd1, NOR_ERASE_SETUP)
+        self.unlock()
+        self._send(self.cmd1, NOR_ERASE_CHIP)
         for chip in range(self.chips):
-            self.unlock()
-            self._send(self.cmd1, NOR_ERASE_SETUP)
-            self.unlock()
-            self._send(self.cmd1, NOR_ERASE_CHIP)
             ok, why = self._wait_erase(chip_abs(0, chip, self.chips))
             if not ok:
                 self.reset()
                 return False, f"чип {chip}: {why}"
         return True, ""
-
     def _wait_erase(self, card_off):
         """Ожидание стирания по DQ7/DQ5.
 
