@@ -2381,6 +2381,69 @@ bad_sync31 = [n for n in list(AT29C_PAGE) + ["28F320"]
 check("AT29C* и 28F320 перенесены в пакет с тем же why", not bad_sync31,
       str(bad_sync31))
 
+# --- 32. Samsung K9F*: NAND - не NOR, и «why» отказывает сам по себе ---------
+# 2.17.27. Три строки NAND (K9F1208U0A, K9F1G08U0A, K9F2G08U0A) стояли с ro=True
+# и why=«NAND, не поддерживается», но проверка карты срабатывала только на
+# ambiguous+why, а ambiguous у них не было - строка МОЛЧА получала однородную
+# карту секторов. Плюс у K9F1208U0A были неверны ёмкость и блок: по даташиту
+# Samsung (Rev 1.6) это 64M x 8 (64 МиБ), страница (512 + 16) байт, блок
+# (16K + 512) байт = 16 КиБ и 4096 блоков, а стояло 128 МиБ и 64 КиБ.
+section("Samsung K9F*: NAND не NOR, отказ и верная геометрия по даташиту")
+
+K9F = {"K9F1208U0A": (64, 16), "K9F1G08U0A": (128, 128), "K9F2G08U0A": (256, 128)}
+bad_k9 = []
+for name, (mib, kib) in sorted(K9F.items()):
+    for where, geo in (("монолит", D.GEOMETRY.get(name)),
+                       ("пакет", C.CHIP_GEOMETRY.get(name))):
+        if not geo:
+            bad_k9.append("%s/%s: строки нет" % (name, where))
+            continue
+        if geo.get("size") != mib << 20 or geo.get("sector") != kib << 10:
+            bad_k9.append("%s/%s: %s/%s" % (name, where, geo.get("size"),
+                                            geo.get("sector")))
+check("K9F1208U0A 64 МиБ/16 КиБ, K9F1G08U0A 128/128, K9F2G08U0A 256/128",
+      not bad_k9, str(bad_k9[:3]))
+
+bad_nand = []
+for name in sorted(K9F):
+    for where, fn in (("монолит", lambda n: D.check_sector_map(
+                          D.geometry_for(n))), ("пакет", C.geometry_for)):
+        try:
+            fn(name)
+            bad_nand.append("%s/%s: открылся" % (name, where))
+        except Exception as exc:                            # noqa: BLE001
+            text = str(exc)
+            if "NAND" not in text or "60h" not in text:
+                bad_nand.append("%s/%s: без NAND/60h" % (name, where))
+check("три NAND-строки отказывают в обеих реализациях словами про NAND и 60h",
+      not bad_nand, str(bad_nand[:3]))
+
+# Структурно: «why» - самостоятельная причина отказа, ambiguous для неё не нужен.
+opens_with_why = []
+for where, table, fn in (("монолит", D.GEOMETRY,
+                          lambda g: D.check_sector_map(D.geometry_for(g["name"]))),
+                         ("пакет", C.CHIP_GEOMETRY,
+                          lambda g: C.check_sector_map(dict(g, name=g["name"])))):
+    for name, geo in sorted(table.items()):
+        if not (geo.get("why") or "").strip():
+            continue
+        if geo.get("sectors"):
+            opens_with_why.append("%s/%s: есть и sectors, и why" % (name, where))
+            continue
+        try:
+            fn(dict(geo, name=name))
+            opens_with_why.append("%s/%s: открылся" % (name, where))
+        except Exception:                                   # noqa: BLE001
+            pass
+check("строка с why не открывается ни в одной из таблиц, даже без ambiguous",
+      not opens_with_why, str(opens_with_why[:3]))
+
+bad_sync32 = [n for n in K9F
+              if (C.CHIP_GEOMETRY.get(n) or {}).get("why")
+              != (D.GEOMETRY.get(n) or {}).get("why")]
+check("три NAND-строки перенесены в пакет с тем же why", not bad_sync32,
+      str(bad_sync32))
+
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)
 print("ИТОГО: прошло %d, провалено %d" % (len(PASS), len(FAIL)))
