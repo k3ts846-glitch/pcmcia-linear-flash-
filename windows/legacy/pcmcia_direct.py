@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.25"          # версия набора: печатается в отчёте и в --version
+KIT_VERSION = "2.17.26"          # версия набора: печатается в отчёте и в --version
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -3018,17 +3018,49 @@ GEOMETRY = {
                           "найденные даташиты этой серии)"),
     # --- Atmel ---
     "AT29C010": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=128 << 10, volts=5, bypass=True, ambiguous=True,
-                     src="Atmel AT29C010: страничная запись с автостиранием страницы, команды Sector Erase 30h нет - этим набором не стирается; 5-вольтовые JEDEC-микросхемы Atmel - семейство AT49F (AT49F040A)"),
+                     size=128 << 10, volts=5, bypass=False, ambiguous=True,
+                     why="страничная запись с автостиранием страницы: команды "
+                         "Sector Erase 30h у AT29C нет вовсе, стирание - только "
+                         "всей микросхемы 6-байтовым кодом, а запись идёт целой "
+                         "страницей (1024 страницы по 128 байт, Device ID D5h у "
+                         "AT29C010A). Этим набором карта не стирается, "
+                         "побайтовая запись A0h здесь не действует",
+                     src="Atmel AT29C010A (128K x 8): 1024 sectors x 128 bytes, "
+                         "Device ID D5h - App Note DOC0518"),
     "AT29C020": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=256 << 10, volts=5, bypass=True, ambiguous=True,
-                     src="Atmel AT29C020: страничная запись с автостиранием страницы, команды Sector Erase 30h нет - этим набором не стирается; 5-вольтовые JEDEC-микросхемы Atmel - семейство AT49F (AT49F040A)"),
+                     size=256 << 10, volts=5, bypass=False, ambiguous=True,
+                     why="страничная запись с автостиранием страницы: команды "
+                         "Sector Erase 30h у AT29C нет вовсе, стирание - только "
+                         "всей микросхемы 6-байтовым кодом, а запись идёт целой "
+                         "страницей (1024 страницы по 256 байт). Этим набором "
+                         "карта не стирается, побайтовая запись A0h здесь не "
+                         "действует",
+                     src="Atmel AT29C020 (256K x 8), даташит 0291P-FLASH-2/05: "
+                         "«1024 Sectors (256 Bytes/Sector)», «the device will "
+                         "automatically erase the sector and then program the "
+                         "latched data»"),
     "AT29C040": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=512 << 10, volts=5, bypass=True, ambiguous=True,
-                     src="Atmel AT29C040: страничная запись с автостиранием страницы, команды Sector Erase 30h нет - этим набором не стирается; 5-вольтовые JEDEC-микросхемы Atmel - семейство AT49F (AT49F040A)"),
+                     size=512 << 10, volts=5, bypass=False, ambiguous=True,
+                     why="страничная запись с автостиранием: у AT29C040A 2048 "
+                         "страниц по 256 байт (Device ID A4h), а у AT29C040 "
+                         "размер страницы и Device ID другие - Atmel: «AT29C040A "
+                         "is identical to AT29C040 except for the sector size "
+                         "and the Device ID Code». Команды Sector Erase 30h нет: "
+                         "стирание только всей микросхемы 6-байтовым кодом",
+                     src="Atmel AT29C040A, даташит «4-Megabit (512K x 8) 5-volt "
+                         "Only 256-Byte Sector Flash Memory»; различие с AT29C040 "
+                         "- DOC0518"),
     "AT29C512": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                     size=64 << 10, volts=5, bypass=True, ambiguous=True,
-                     src="Atmel AT29C512: страничная запись с автостиранием страницы, команды Sector Erase 30h нет - этим набором не стирается; 5-вольтовые JEDEC-микросхемы Atmel - семейство AT49F (AT49F040A)"),
+                     size=64 << 10, volts=5, bypass=False, ambiguous=True,
+                     why="страничная запись с автостиранием страницы: команды "
+                         "Sector Erase 30h у AT29C нет вовсе, стирание - только "
+                         "всей микросхемы 6-байтовым кодом, а запись идёт целой "
+                         "страницей (512 страниц по 128 байт, Device ID 5Dh). "
+                         "Этим набором карта не стирается, побайтовая запись A0h "
+                         "здесь не действует",
+                     src="Atmel AT29C512 (64K x 8): 512 sectors x 128 bytes, "
+                         "Device ID 5Dh - App Note DOC0518 «Programming Atmel's "
+                         "AT29 Flash Family»"),
     # --- Toshiba ---
     # Даташит Toshiba TC58FVT160/B160A (16-MBIT, 2Mx8/1Mx16): «Block erase
     # architecture 1 x 16 Kbytes / 2 x 8 Kbytes / 1 x 32 Kbytes / 31 x 64
@@ -3158,8 +3190,15 @@ GEOMETRY = {
     # _erase_sector_guarded, но лучше не доводить).
     "28F320": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=True,
                    size=4 << 20, volts=3, protocol="intel", ambiguous=True,
-                   src="Intel 28F320: укажите ревизию (B3T/B - boot-блоки, "
-                       "J3/J5 - блоки крупнее); общая раскладка не подтверждена"),
+                   why="у Intel 28F320 два разных семейства с разной "
+                       "раскладкой: 28F320B3 (3-Volt Advanced Boot Block: "
+                       "восемь 8-КиБ блоков данных и до 63 блоков по 64 КиБ) и "
+                       "28F320J3 (StrataFlash J3: 32 блока по 128 КиБ, "
+                       "x8/x16). Без ревизии раскладка не подтверждена - "
+                       "укажите точное имя с маркировки",
+                   src="Intel 3 Volt Advanced Boot Block 28F004/400B3, "
+                         "28F008/800B3, 28F016/160B3, 28F320B3, 28F640B3; Intel "
+                         "StrataFlash J3 28F320J3"),
     # Обозначения M28F016S5 у ST не найдено: байтовое семейство FlashFile
     # выпускала Intel (28F004S5/008S5/016S5), у ST были M28F008/M28F016 (12 В)
     # и M28F102. Пока даташита нет - отказ, а не «как у Intel».

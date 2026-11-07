@@ -641,13 +641,16 @@ for name in ("28F010", "28F020", "28F256", "28F512"):
 check("28F010/020/256/512 (12 В, bulk erase): отказ с объяснением", not bad,
       str(bad[:2]))
 
-# «28F320» без ревизии: у B3T/B boot-блоки, у J3/J5 блоки крупнее — гадать нельзя.
+# «28F320» без ревизии: у B3 boot-блоки (8 x 8 КиБ + до 63 x 64 КиБ), у J3 -
+# 32 блока по 128 КиБ. Гадать нельзя, и 2.17.26 отказ называет ОБА семейства,
+# а не просит «указать ревизию» вообще (B3 и J3 - разные даташиты).
 try:
     D.check_sector_map(D.geometry_for("28F320"))
-    no320 = False
+    no320 = ""
 except D.DirectError as exc:
-    no320 = "ревизию" in str(exc)
-check("28F320 без ревизии: отказ «укажите ревизию»", no320)
+    no320 = str(exc)
+check("28F320 без ревизии: отказ называет 28F320B3 и 28F320J3",
+      "28F320B3" in no320 and "28F320J3" in no320, no320[:80])
 
 # Списки напряжений не должны содержать сами себя (такая строка однажды
 # попала в chips.json правкой списка).
@@ -2315,6 +2318,68 @@ bad_sync = [n for n in REV_PAIRS
             or not (C.CHIP_GEOMETRY.get(n) or {}).get("ambiguous")]
 check("девять строк перенесены в пакет с тем же why и ambiguous",
       not bad_sync, str(bad_sync))
+
+# --- 31. AT29C: причина не в ревизии, а в отсутствии команды 30h ------------
+# 2.17.26. Четыре строки AT29C (страничная запись с автостиранием) и 28F320
+# отказывали текстом «ревизия не указана... 16K + 2x8K + 32K + 64K» - то есть
+# про boot-блоки, которых у AT29C нет вовсе. Настоящая причина другая, и она
+# теперь сказана словами даташита: команды Sector Erase 30h у AT29C нет,
+# стирание - только всей микросхемы 6-байтовым кодом, запись идёт целой
+# страницей (AT29C512/AT29C010A - 128 байт, AT29C020/AT29C040A - 256).
+# Заодно: bypass=True у AT29C означал бы Unlock Bypass 20h, которого там нет.
+section("AT29C и 28F320: причина названа по даташиту, а не «ревизия»")
+
+AT29C_PAGE = {"AT29C512": "128 байт", "AT29C010": "128 байт",
+              "AT29C020": "256 байт", "AT29C040": "256 байт"}
+bad_at = []
+for name, page in sorted(AT29C_PAGE.items()):
+    for where, fn in (("монолит", lambda n: D.check_sector_map(
+                          D.geometry_for(n))), ("пакет", C.geometry_for)):
+        try:
+            fn(name)
+            bad_at.append("%s/%s: открылся" % (name, where))
+            continue
+        except Exception as exc:                            # noqa: BLE001
+            text = str(exc)
+        if "30h" not in text or page not in text:
+            bad_at.append("%s/%s: нет 30h или размера страницы" % (name, where))
+        if "16K + 2x8K" in text:
+            bad_at.append("%s/%s: всё ещё текст про boot-блоки" % (name, where))
+    mono_bp = D.GEOMETRY[name].get("bypass")
+    pkg_bp = (C.CHIP_GEOMETRY.get(name) or {}).get("bypass")
+    if mono_bp or pkg_bp:
+        bad_at.append("%s: bypass=%s/%s (Unlock Bypass 20h у AT29C нет)"
+                      % (name, mono_bp, pkg_bp))
+check("AT29C*: отказ про 30h и размер страницы, bypass выключен в обеих таблицах",
+      not bad_at, str(bad_at[:3]))
+
+bad_320 = []
+for where, fn in (("монолит", lambda: D.check_sector_map(D.geometry_for("28F320"))),
+                  ("пакет", lambda: C.geometry_for("28F320"))):
+    try:
+        fn()
+        bad_320.append("%s: открылся" % where)
+    except Exception as exc:                                # noqa: BLE001
+        text = str(exc)
+        if "28F320B3" not in text or "28F320J3" not in text:
+            bad_320.append("%s: не названы оба семейства" % where)
+check("28F320: обе реализации называют 28F320B3 и 28F320J3", not bad_320,
+      str(bad_320))
+
+# Структурно: после 2.17.26 ни одна строка не отказывает ОБЩИМ текстом про
+# ревизию - он остался только страховкой в коде.
+no_why_mono = sorted(n for n, g in D.GEOMETRY.items()
+                     if g.get("ambiguous") and not (g.get("why") or "").strip())
+no_why_pkg = sorted(n for n, g in C.CHIP_GEOMETRY.items()
+                    if g.get("ambiguous") and not (g.get("why") or "").strip())
+check("у каждой ambiguous-строки в обеих таблицах есть свой why",
+      not no_why_mono and not no_why_pkg, (no_why_mono[:3], no_why_pkg[:3]))
+
+bad_sync31 = [n for n in list(AT29C_PAGE) + ["28F320"]
+              if (C.CHIP_GEOMETRY.get(n) or {}).get("why")
+              != (D.GEOMETRY.get(n) or {}).get("why")]
+check("AT29C* и 28F320 перенесены в пакет с тем же why", not bad_sync31,
+      str(bad_sync31))
 
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)
