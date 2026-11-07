@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.24"          # версия набора: печатается в отчёте и в --version
+KIT_VERSION = "2.17.25"          # версия набора: печатается в отчёте и в --version
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -2742,23 +2742,39 @@ GEOMETRY = {
     "Am29F400": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      ambiguous=True,
                      size=512 << 10, volts=5,
-                     src="AMD Am29F400: ревизия не указана - укажите "
-                         "Am29F400AB (bottom-boot) или Am29F400AT (top-boot)"),
-    "Am29LV400": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
-                      wide=False, ambiguous=True,
-                      size=512 << 10, volts=3,
-                      src="AMD Am29LV400: ревизия не указана - укажите "
-                          "Am29LV400BB или Am29LV400BT"),
-    "Am29LV160": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
-                      wide=False, ambiguous=True,
-                      size=2 << 20, volts=3,
-                      src="AMD Am29LV160: ревизия не указана - укажите "
-                          "Am29LV160DB или Am29LV160DT"),
-    "Am29LV001": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA),
-                      wide=False, ambiguous=True,
-                      size=128 << 10, volts=3,
-                      src="AMD Am29LV001: ревизия не указана - укажите "
-                          "Am29LV001BB или Am29LV001BT"),
+                     why="ревизия не указана: у boot-чипов от неё зависит "
+                         "раскладка секторов (16K + 2x8K + 32K + 64K ...), а при "
+                         "неверной раскладке первое же стирание заденет соседние "
+                         "данные. Укажите --chip Am29F400AB или Am29F400AT",
+                     src="AMD Am29F400AB/Am29F400AT (даташиты AMD, boot-block: "
+                         "bottom/top)"),
+    "Am29LV400": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     ambiguous=True,
+                     size=512 << 10, volts=3,
+                     why="ревизия не указана: у boot-чипов от неё зависит "
+                         "раскладка секторов (16K + 2x8K + 32K + 64K ...), а при "
+                         "неверной раскладке первое же стирание заденет соседние "
+                         "данные. Укажите --chip Am29LV400BB или Am29LV400BT",
+                     src="AMD Am29LV400BB/Am29LV400BT (даташиты AMD, 3 В, boot- "
+                         "block)"),
+    "Am29LV160": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     ambiguous=True,
+                     size=2 << 20, volts=3,
+                     why="ревизия не указана: у boot-чипов от неё зависит "
+                         "раскладка секторов (16K + 2x8K + 32K + 64K ...), а при "
+                         "неверной раскладке первое же стирание заденет соседние "
+                         "данные. Укажите --chip Am29LV160DB или Am29LV160DT",
+                     src="AMD Am29LV160DB/Am29LV160DT (даташиты AMD, 3 В, boot- "
+                         "block)"),
+    "Am29LV001": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     ambiguous=True,
+                     size=128 << 10, volts=3,
+                     why="ревизия не указана: у boot-чипов от неё зависит "
+                         "раскладка секторов (16K + 2x8K + 32K + 64K ...), а при "
+                         "неверной раскладке первое же стирание заденет соседние "
+                         "данные. Укажите --chip Am29LV001BB или Am29LV001BT",
+                     src="AMD Am29LV001BB/Am29LV001BT (даташиты AMD, 3 В, boot- "
+                         "block)"),
     "Am29F016": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      size=2 << 20, volts=5, bypass=False,
                      src="AMD Am29F016: 32 x 64 КиБ, 5 В, побайтно A0h. Unlock "
@@ -2787,10 +2803,15 @@ GEOMETRY = {
                          "Bypass 20h есть не у всех ревизий - по умолчанию не шлём"),
     "Am29LV016": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                       size=2 << 20, volts=3, src="AMD Am29LV016: 3 В, 32 x 64 КиБ"),
-    "Am29LV800": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
-                      size=1 << 20, volts=3,
-                      src="AMD Am29LV800: ревизия не указана - укажите "
-                          "Am29LV800BB или Am29LV800BT"),
+    "Am29LV800": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     ambiguous=True,
+                     size=1 << 20, volts=3,
+                     why="ревизия не указана: у boot-чипов от неё зависит "
+                         "раскладка секторов (16K + 2x8K + 32K + 64K ...), а при "
+                         "неверной раскладке первое же стирание заденет соседние "
+                         "данные. Укажите --chip Am29LV800BB или Am29LV800BT",
+                     src="AMD Am29LV800BB/Am29LV800BT (даташиты AMD, 3 В, boot- "
+                         "block)"),
     "MBM29F016": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                       size=2 << 20, volts=5, bypass=True,
                       src="Fujitsu MBM29F016A: 5 В. Unlock Bypass 20h"),
@@ -2869,15 +2890,24 @@ GEOMETRY = {
                        wide=False, size=512 << 10, volts=5, bypass=False,
                        src="Fujitsu MBM29F040C: 4 Мбит, 8 x 64 КиБ"),
     # --- JEDEC-чипы из AMD_PARTS, которых не хватало в таблице геометрии ---
-    "Am29F800": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
+    "Am29F800": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     ambiguous=True,
                      size=1 << 20, volts=5, bypass=True,
-                     src="AMD Am29F800: ревизия не указана - укажите "
-                         "Am29F800BB (bottom-boot) или Am29F800BT (top-boot)"),
-    "Am29F200": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
+                     why="ревизия не указана: у boot-чипов от неё зависит "
+                         "раскладка секторов (16K + 2x8K + 32K + 64K ...), а при "
+                         "неверной раскладке первое же стирание заденет соседние "
+                         "данные. Укажите --chip Am29F800BB или Am29F800BT",
+                     src="AMD Am29F800BB/Am29F800BT (даташиты AMD, boot-block: "
+                         "bottom/top)"),
+    "Am29F200": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     ambiguous=True,
                      size=256 << 10, volts=5, bypass=True,
-                     src="AMD Am29F200: ревизия не указана - раскладка секторов "
-                         "зависит от неё. Укажите --chip Am29F200AB или "
-                         "Am29F200AT"),
+                     why="ревизия не указана: у boot-чипов от неё зависит "
+                         "раскладка секторов (16K + 2x8K + 32K + 64K ...), а при "
+                         "неверной раскладке первое же стирание заденет соседние "
+                         "данные. Укажите --chip Am29F200AB или Am29F200AT",
+                     src="AMD Am29F200AB/Am29F200AT (даташиты AMD, boot-block: "
+                         "bottom/top)"),
     "Am29F010": dict(sector=16 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      size=128 << 10, volts=5, bypass=False,
                      src="AMD Am29F010: 8 x 16 КиБ = 128 КиБ, 5 В (таблица "
@@ -2913,15 +2943,24 @@ GEOMETRY = {
                       src="Fujitsu MBM29F033: имени нет ни в flashchips.h, ни в "
                           "jedec_probe.c; 64 x 64 КиБ и 5 В - данные по умолчанию, "
                           "даташитом не сверены"),
-    "MBM29F002": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
+    "MBM29F002": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     ambiguous=True,
                      size=256 << 10, volts=5,
-                     src="Fujitsu MBM29F002: ревизия не указана - укажите "
-                         "MBM29F002TC (top-boot) или MBM29F002BC (bottom-boot)"),
-    "MBM29F004": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False, ambiguous=True,
+                     why="ревизия не указана: у boot-чипов от неё зависит "
+                         "раскладка секторов (16K + 2x8K + 32K + 64K ...), а при "
+                         "неверной раскладке первое же стирание заденет соседние "
+                         "данные. Укажите --chip MBM29F002TC или MBM29F002BC",
+                     src="Fujitsu MBM29F002TC/MBM29F002BC (даташиты Fujitsu, "
+                         "top/bottom boot)"),
+    "MBM29F004": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     ambiguous=True,
                      size=512 << 10, volts=5,
-                     src="Fujitsu MBM29F004: ревизия не указана - укажите "
-                         "MBM29F004TC (top-boot) или MBM29F004BC (bottom-boot)"),
-    # --- ST Microelectronics ---
+                     why="ревизия не указана: у boot-чипов от неё зависит "
+                         "раскладка секторов (16K + 2x8K + 32K + 64K ...), а при "
+                         "неверной раскладке первое же стирание заденет соседние "
+                         "данные. Укажите --chip MBM29F004TC или MBM29F004BC",
+                     src="Fujitsu MBM29F004TC/MBM29F004BC (даташиты Fujitsu, "
+                         "top/bottom boot)"),
     "M28F102": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                     size=128 << 10, volts=12, ambiguous=True,
                     # 2.17.17: как у 28F010/28F020 - страховка в самом

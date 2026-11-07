@@ -2256,6 +2256,66 @@ check("M28F016S5 больше не строка таблицы, а подска�
       "M28F016S5" not in D.GEOMETRY and "M28F016S5" in D.WRONG_NAMES
       and "M28F016S5" not in C.CHIP_GEOMETRY)
 
+# --- 30. «Ревизия не указана»: отказ называет СВОИ ревизии ------------------
+# 2.17.25. Девять строк (Am29F200/400/800, Am29LV001/160/400/800, MBM29F002/004)
+# отказывали общей фразой с примером «например, Am29F800BB для bottom-boot» -
+# для Am29F200 или M5M29F020 это чужое имя. Теперь у каждой строки свой why с
+# её собственными ревизиями, и строки перенесены в базу пакета, поэтому отказ
+# обеих реализаций дословно одинаков.
+section("«ревизия не указана»: отказ называет ревизии этой микросхемы")
+
+REV_PAIRS = {
+    "Am29F200": ("Am29F200AB", "Am29F200AT"),
+    "Am29F400": ("Am29F400AB", "Am29F400AT"),
+    "Am29F800": ("Am29F800BB", "Am29F800BT"),
+    "Am29LV001": ("Am29LV001BB", "Am29LV001BT"),
+    "Am29LV160": ("Am29LV160DB", "Am29LV160DT"),
+    "Am29LV400": ("Am29LV400BB", "Am29LV400BT"),
+    "Am29LV800": ("Am29LV800BB", "Am29LV800BT"),
+    "MBM29F002": ("MBM29F002TC", "MBM29F002BC"),
+    "MBM29F004": ("MBM29F004TC", "MBM29F004BC"),
+}
+
+bad_rev = []
+for name, (a, b) in sorted(REV_PAIRS.items()):
+    for where, fn in (("монолит", lambda n: D.check_sector_map(
+                          D.geometry_for(n))), ("пакет", C.geometry_for)):
+        try:
+            fn(name)
+            bad_rev.append("%s/%s: открылся" % (name, where))
+            continue
+        except Exception as exc:                            # noqa: BLE001
+            text = str(exc)
+        if a not in text or b not in text:
+            bad_rev.append("%s/%s: не названы свои ревизии" % (name, where))
+        # чужое имя в отказе сбивает с толку: у Am29F200 не должно быть Am29F800
+        foreign = [o for o in REV_PAIRS if o != name
+                   and not name.startswith(o) and o in text]
+        if foreign:
+            bad_rev.append("%s/%s: упомянуто чужое %s" % (name, where, foreign[:1]))
+check("девять boot-имён: отказ обеих реализаций называет свои T/B-ревизии",
+      not bad_rev, str(bad_rev[:3]))
+
+# Обещание «Укажите --chip X» должно быть выполнимым: X есть в таблице.
+bad_promise = []
+for name, geo in sorted(D.GEOMETRY.items()):
+    why = (geo.get("why") or "")
+    if not why.startswith("ревизия не указана"):
+        continue
+    named = {t for t in _re.findall(r"[A-Za-z0-9]+", why)
+             if t in D.GEOMETRY and t != name}
+    if len(named) < 2:
+        bad_promise.append((name, sorted(named)))
+check("«ревизия не указана» называет не меньше двух имён, которые есть в таблице",
+      not bad_promise, str(bad_promise[:3]))
+
+# и те же девять строк теперь есть в базе пакета - с тем же why
+bad_sync = [n for n in REV_PAIRS
+            if (C.CHIP_GEOMETRY.get(n) or {}).get("why") != D.GEOMETRY[n]["why"]
+            or not (C.CHIP_GEOMETRY.get(n) or {}).get("ambiguous")]
+check("девять строк перенесены в пакет с тем же why и ambiguous",
+      not bad_sync, str(bad_sync))
+
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)
 print("ИТОГО: прошло %d, провалено %d" % (len(PASS), len(FAIL)))
