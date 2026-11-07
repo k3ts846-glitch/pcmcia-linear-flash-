@@ -389,7 +389,8 @@ def t_cli(bindir, env):
     check("при отказе входа пульт останавливается", result.returncode == 1,
           str(result.returncode))
     check("подсказка про вход по ключу на месте",
-          "add_key" in result.stdout or "ВХОД НЕ ВЫПОЛНЕН" in result.stdout, "")
+          "ВХОД НЕ ВЫПОЛНЕН" in result.stdout
+          and "pcmcia_kit key" in result.stdout, result.stdout[-300:])
 
     reset_fakes("ok", remote_out="  микросхема : Am29F016\n  протокол команд : JEDEC\n")
     work_before = os.path.getsize(os.path.join(KIT, "windows", "legacy", "pcmcia_direct.py"))

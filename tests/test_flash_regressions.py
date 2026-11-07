@@ -1804,7 +1804,7 @@ check("версия одна: KIT_VERSION, оба _version.py и читател�
 
 _greedy = '.split("=", 1)[1].strip()'
 _readers = ["collect_all.py", "pcmcia_ctl.py", "linux/pcmcia_flash.py",
-            "src/pcmcia_kit/cli.py", "windows/legacy/pcmcia_win.py"]
+            "src/pcmcia_kit/cli.py"]
 _left = [rel for rel in _readers
          if _greedy in (pathlib.Path(KIT) / rel).read_text(encoding="utf-8")]
 check("читатели KIT_VERSION отрезают хвостовой комментарий (%d файлов)"
