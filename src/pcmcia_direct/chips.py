@@ -5,7 +5,8 @@
 правильно; строка с why -> причина словами документа; ambiguous без why
 -> просьба указать ревизию."""
 
-from .chips_data import GEOMETRY, VENDOR_PARTS, VPP126, VPP5, WRONG_NAMES
+from .chips_data import (GEOMETRY, INTEL_PARTS, VENDOR_PARTS, VPP126, VPP5,
+                         WRONG_NAMES)
 from .errors import DirectError
 from .nor_commands import AMD_READ_CFI, INTEL_READ_CFI
 
@@ -20,11 +21,30 @@ def vendor_part(vid, did):
 # карт Vpp жёстко разведён на 12 В. Поэтому "неизвестно", а не "нельзя".
 
 
+def _vpp_volts(name: str) -> int:
+    """Сколько вольт нужно на Vpp для имени из VPP5: 5 или 3 (не нужно вовсе).
+
+    2.18.2: до этого любое имя из VPP5 давало «5 В». Для 3-вольтовых
+    микросхем (SST39LF/VF, Am29LV*, TC58FVT*, 28F320/800B3/160B3 и т. п.)
+    это неверно: у них нет вывода Vpp, программирование идёт от Vcc
+    2.7-3.6 В (даташиты: SST DS20005023 «Single 2.7-3.6 V Read and Write
+    Operation», AMD Am29LV «3.0 V single power supply»). Поэтому вольты
+    берём из геометрии, а не из одного факта «имя в списке VPP5».
+    """
+    geo = GEOMETRY.get(name) or {}
+    try:
+        volts = int(geo.get("volts") or 5)
+    except (TypeError, ValueError):
+        volts = 5
+    return 3 if volts <= 3 else 5
+
+
 def vpp_need(info):
-    """Сколько вольт программирования нужно карте: 5, 12 или 0 (неизвестно).
+    """Сколько вольт программирования нужно карте: 3, 5, 12 или 0 (неизвестно).
 
     Возвращает (вольт, откуда). Никогда не отвечает «12» только потому, что в
-    паспорте встретилось слово AMD.
+    паспорте встретилось слово AMD. 3 - микросхеме Vpp не нужен вовсе
+    (3-вольтовая, программируется от Vcc); 0 - по паспорту не определить.
     """
     j = (info or {}).get("jedec")
     if j and len(j) >= 4:
@@ -38,7 +58,10 @@ def vpp_need(info):
             if name in VPP126:
                 return 12, f"по JEDEC: {name} (Vpp 12 В выведен наружу)"
             if name in VPP5:
-                return 5, f"по JEDEC: {name} — семейство 5.0 V only, 12 В не нужно"
+                if _vpp_volts(name) == 3:
+                    return 3, (f"по JEDEC: {name} — 3-вольтовая, Vpp не нужна "
+                               "(программирование от Vcc 2.7-3.6 В)")
+                return 5, f"по JEDEC: {name} — 5.0 V only, 5 В на Vpp, 12 В не нужно"
     prod = " ".join((info or {}).get("product") or [])
     up = prod.upper()
     for name in VPP126:
@@ -46,7 +69,10 @@ def vpp_need(info):
             return 12, f"по строке паспорта: {name}"
     for name in VPP5:
         if name.upper() in up:
-            return 5, f"по строке паспорта: {name}"
+            if _vpp_volts(name) == 3:
+                return 3, (f"по строке паспорта: {name} — 3-вольтовая, "
+                           "Vpp не нужна (программирование от Vcc 2.7-3.6 В)")
+            return 5, f"по строке паспорта: {name}"""
     if "SERIES 2" in up or "SERIES2" in up:
         return 0, ("Intel Series 2 (28F, 5 В): по документации 12 В не нужно, "
                    "но у части карт Vpp разведён на 12 В — проверить пробной "
@@ -238,17 +264,11 @@ def chip_name_from_info(info):
         part = vendor_part(vid, did)
         if part:
             return part[0]
-    # Коды Intel: 0xA2 = 28F008SA (flashrom и ядро), 0xA0 = 28F016SV
-    # («28F016SA/SV» по flashrom; ядро читает тот же A0h как 28F016S5 - у них
-    # одна раскладка), 0xA6 = 28F008S5, 0xA7 = 28F004S5. Кода A1h в этих
-    # таблицах нет, поэтому прежнее «A1h = 28F016SA» убрано: угадывать нельзя.
-    # 0xB4 - 28F010 по даташиту 290207-010 (Intelligent Identifier: mfr 89h,
-    # device B4h, читается и командой 90h, и поднятием A9 - второй способ в
-    # слоте недоступен). Кода 28F020 в приложенном документе нет.
-    intel_ids = {0xA0: "28F016SV", 0xA2: "28F008SA", 0xA6: "28F008S5",
-                 0xA7: "28F004S5", 0xB4: "28F010"}
-    if vid == 0x89 and did in intel_ids:
-        return intel_ids[did]
+    # 2.18.2: коды Intel берём из ОДНОЙ таблицы INTEL_PARTS (chips_data),
+    # а не из встроенного словаря: их было три, и они противоречили друг
+    # другу (см. комментарий у INTEL_PARTS).
+    if vid == 0x89 and did in INTEL_PARTS:
+        return INTEL_PARTS[did][0]
     prod = " ".join((info or {}).get("product") or []).upper()
     for name in list(GEOMETRY) + ["28F008SA", "28F016SA"]:
         if name.upper() in prod:
@@ -435,11 +455,11 @@ def _autodetect_amd(flash):
         # Fujitsu (04h/ADh) — MBM29F016A, JEDEC-совместимый с Am29F016
         out["name"] = part[0]
         out["id_documented"] = True
-    elif man == 0x89:
-        out["name"] = {0xA1: "28F016SA", 0xA2: "28F008SA",
-                       0xA3: "28F016S5"}.get(dev, "")
-        if out["name"]:
-            out["id_documented"] = True
+    elif man == 0x89 and dev in INTEL_PARTS:
+        # 2.18.2: было A1=28F016SA, A3=28F016S5 - таких кодов нет ни в
+        # flashrom, ни в ядре; теперь только задокументированные (INTEL_PARTS).
+        out["name"] = INTEL_PARTS[dev][0]
+        out["id_documented"] = True
     elif man in (0x04, 0x1F, 0x20, 0xC2, 0xEC, 0xBF):
         # Производитель известен, код устройства — нет: честно сообщаем,
         # чтобы не подменять имя параметрами Am29F016.
@@ -466,14 +486,12 @@ def _autodetect_intel(flash):
     if man in (0x89, 0x01, 0x1F, 0x20) and dev not in (0xFF, 0x00, None):
         out["manuf"] = man
         out["device"] = dev
-        names = {0xA1: "28F016SA", 0xA2: "28F008SA", 0xA3: "28F016S5",
-                 0xA4: "28F320"}
-        if man == 0x89:
-            out["name"] = names.get(dev, "")
-        else:
-            part = vendor_part(man, dev)
-            if part:
-                out["name"] = part[0]
+        # 2.18.2: одна таблица вместо встроенной. Кодов A1h/A3h/A4h (и
+        # «28F320» по A4h) нет ни в flashrom, ни в ядре - имя по ним не
+        # выдумываем; 28F320 остаётся в базе, но определяется по CFI/паспорту.
+        part = vendor_part(man, dev)
+        if part:
+            out["name"] = part[0]
     return out
 
 

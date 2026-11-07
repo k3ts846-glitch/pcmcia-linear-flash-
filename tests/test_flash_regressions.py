@@ -359,8 +359,11 @@ check("паспорт: AM29F016D побеждает AM29F016 (длинное с�
       geo.get("name") == "Am29F016D", str(geo.get("name")))
 geo = C.identify_chip(FakeFlash(table, ids=(None, None)),
                       info={"manufacturer": "0x04", "device": "0xad"})
+# 2.18.2: 04h/ADh ведёт к ОДНОМУ имени - MBM29F016A (так называется документ
+# Fujitsu DS05-20807-3E). Раньше набор звал этот код MBM29F016A, а реестр и
+# база пакета - MBM29F016, то есть один и тот же код вёл к двум именам.
 check("микросхема молчит -> JEDEC ID берётся из паспорта ('0x04'/'0xad')",
-      geo.get("name") == "MBM29F016", str(geo.get("name")))
+      geo.get("name") == "MBM29F016A", str(geo.get("name")))
 
 # boot-чип: карта секторов должна сходиться с ёмкостью и давать правильные
 # границы - 16K, 2x8K, 32K в начале, дальше по 64K
@@ -519,9 +522,12 @@ for name, count, size in (("28F004S5", 8, 512 << 10), ("28F008S5", 16, 1 << 20))
 check("28F004S5 / 28F008S5: 8 и 16 блоков по 64 КиБ, 5 В, байтовые", not bad,
       str(bad[:3]))
 
-want_intel = {0xA0: "28F016SV", 0xA2: "28F008SA", 0xA6: "28F008S5", 0xA7: "28F004S5"}
+# 2.18.2: добавлен B4h = 28F010 (Intel 290207-010, Intelligent Identifier);
+# кодов A1h/A3h/A4h (и «28F320 по A4h») нет ни в flashrom, ни в ядре - их нет.
+want_intel = {0xA0: "28F016SV", 0xA2: "28F008SA", 0xA6: "28F008S5",
+              0xA7: "28F004S5", 0xB4: "28F010"}
 got_intel = {k: v[0] for k, v in C.INTEL_PARTS.items()}
-check("Intel ID по двум источникам: A0h/A2h/A6h/A7h, без выдуманных A1h/B5h/B6h",
+check("Intel ID по двум источникам: A0h/A2h/A6h/A7h/B4h, без выдуманных A1h/B5h/B6h",
       got_intel == want_intel, str(got_intel))
 
 # Реестр в JSON и модуль jedec_registry.py не должны разъезжаться: раньше
@@ -2032,8 +2038,12 @@ susp = []
 for name, geo in sorted(D.GEOMETRY.items()):
     if geo.get("volts") != 12:
         continue
+    # 2.18.2: у семейства AMD Am28F* команды JEDEC-совместимые (555h/2AAh),
+    # но стирание только всего чипа и при 12 В, поэтому правильная пометка -
+    # ro=True + why («только Bulk Erase»), а не ambiguous и не unverified.
     if (geo.get("protocol") == "intel" or bool(geo.get("unverified"))
-            or (bool(geo.get("ambiguous")) and bool(geo.get("why")))):
+            or (bool(geo.get("ambiguous")) and bool(geo.get("why")))
+            or (bool(geo.get("ro")) and bool(geo.get("why")))):
         continue
     susp.append(name)
 check("ни одна 12-вольтовая строка не притворяется обычной JEDEC-микросхемой",
@@ -2544,6 +2554,222 @@ bad_sync32 = [n for n in K9F
               != (D.GEOMETRY.get(n) or {}).get("why")]
 check("три NAND-строки перенесены в пакет с тем же why", not bad_sync32,
       str(bad_sync32))
+
+
+# --- 2.18.2. Сверка источников: списки Vpp, имена, реестр ID, вольты ----------
+# До этого раунда один и тот же факт жил в 2-3 местах и местами противоречил
+# сам себе: имя "TC58FVT320" стояло в списках Vpp, хотя WRONG_NAMES объявляет
+# такое имя неверным; склеенное "Am29F032/Am29F033" лежало в списке как имя
+# микросхемы; четыре строки Am28F* были в VPP126 без геометрии; один код
+# 04h/ADh вёл к двум именам (MBM29F016 и MBM29F016A); реестр дважды дублировал
+# сам себя (JSON и jedec_registry.py); у Intel в наборе было ТРИ разных словаря
+# кодов; реестр не знал про ST; запись включала жёстко 5 В даже 12-вольтовым.
+section("2.18.2: сверка источников (списки Vpp, имена, реестр ID, вольты)")
+
+# 1. Имён-«фантомов» в списках Vpp быть не должно: каждое имя обязано быть
+#    строкой хотя бы одной из двух таблиц геометрии.
+phantoms = []
+for where, lists, tables in (
+        ("набор", (D.VPP5, D.VPP126), (D.GEOMETRY,)),
+        ("пакет", (C.VPP5, C.VPP126), (C.CHIP_GEOMETRY, D.GEOMETRY))):
+    known = set().union(*[set(t) for t in tables])
+    for lst in lists:
+        phantoms += ["%s/%s" % (where, n) for n in sorted(set(lst) - known)]
+check("в списках Vpp нет имён, которых нет ни в одной таблице", not phantoms,
+      str(phantoms[:4]))
+
+# 2. Имя, объявленное неверным, не может стоять в списках как рабочее.
+wrong_in_lists = sorted(n for n in (D.WRONG_NAMES or {})
+                        if n in D.VPP5 or n in D.VPP126
+                        or n in C.VPP5 or n in C.VPP126)
+check("имена из WRONG_NAMES не встречаются в списках Vpp", not wrong_in_lists,
+      str(wrong_in_lists[:4]))
+
+# 3. Склеенных через слэш «имён» в списках нет (было "Am29F032/Am29F033").
+slashed = sorted(n for lst in (D.VPP5, D.VPP126, C.VPP5, C.VPP126)
+                 for n in lst if "/" in n)
+check("в списках Vpp нет склеенных через слэш имён", not slashed,
+      str(slashed[:4]))
+
+# 4. 32-Мбит Toshiba называется TC58FVT321: TC58FVT320 в WRONG_NAMES, а строка
+#    геометрии есть только у правильного имени.
+tok = []
+for where, lists, table in (("набор", (D.VPP5, D.VPP126), D.GEOMETRY),
+                            ("пакет", (C.VPP5, C.VPP126), C.CHIP_GEOMETRY)):
+    if "TC58FVT321" not in lists[0] or "TC58FVT320" in lists[0]:
+        tok.append(where + ": список")
+    if "TC58FVT321" not in table or "TC58FVT320" in table:
+        tok.append(where + ": таблица")
+check("TC58FVT320 нигде не осталось, TC58FVT321 есть и в списке, и в таблице",
+      not tok, str(tok))
+
+# 5. Каждая строка каждой таблицы описана в списке Vpp СВОЕЙ реализации, то
+#    есть vpp_need() по имени отвечает числом, а не «не определить».
+nolist = []
+for where, table, lists in (("набор", D.GEOMETRY, (D.VPP5, D.VPP126)),
+                            ("пакет", C.CHIP_GEOMETRY, (C.VPP5, C.VPP126))):
+    both = set(lists[0]) | set(lists[1])
+    nolist += ["%s/%s" % (where, n) for n in sorted(set(table) - both)]
+check("каждая строка таблицы есть в списке Vpp своей реализации", not nolist,
+      str(nolist[:4]))
+
+# 5б. После 2.18.2 списки Vpp двух источников совпадают полностью - и по
+#     именам, и по мощности. Это и есть «один факт - одно место».
+check("списки VPP5 и VPP126 совпадают у набора и базы",
+      D.VPP5 == C.VPP5 and D.VPP126 == C.VPP126,
+      "VPP5: %s / VPP126: %s" % (sorted(D.VPP5 ^ C.VPP5)[:4],
+                                 sorted(D.VPP126 ^ C.VPP126)[:4]))
+
+# 6. Списки пакета могут содержать имена, которых в базе нет (строки, которые
+#    есть только в наборе), но не наоборот: имена набора обязаны быть в базе.
+missing_in_db = sorted(set(D.GEOMETRY) - set(C.CHIP_GEOMETRY))
+check("имена без строки в базе перечислены явно (их 12 и они известны)",
+      missing_in_db == sorted(["Am29F032", "Am29F033", "HN28F010", "HN28F020",
+                               "HN28F100", "LH28F010", "LH28F020", "M28F016",
+                               "M5M29F010", "M5M29F020", "MBM29F033",
+                               "MX29F3210"]), str(missing_in_db))
+
+# 7. Четыре 12-вольтовые строки AMD Am28F: были в VPP126 без геометрии - то
+#    есть список знал имя, а таблица нет. Теперь строка есть в обеих таблицах,
+#    с ro и why (стирание только всего чипа).
+am28f = {"Am28F256": 32, "Am28F512": 64, "Am28F010": 128, "Am28F020": 256}
+bad = []
+for name, kib in am28f.items():
+    for where, geo, vpp126 in (("набор", D.GEOMETRY.get(name) or {}, D.VPP126),
+                               ("пакет", C.CHIP_GEOMETRY.get(name) or {}, C.VPP126)):
+        if not geo:
+            bad.append("%s/%s: нет строки" % (where, name))
+            continue
+        if geo.get("size") != kib << 10 or geo.get("sector") != geo.get("size"):
+            bad.append("%s/%s: size/sector %s/%s" % (where, name, geo.get("size"),
+                                                     geo.get("sector")))
+        if geo.get("volts") != 12 or not geo.get("ro") or not geo.get("why"):
+            bad.append("%s/%s: volts=%s ro=%s why=%s" % (where, name,
+                                                         geo.get("volts"),
+                                                         geo.get("ro"),
+                                                         bool(geo.get("why"))))
+        if name not in vpp126:
+            bad.append("%s/%s: нет в VPP126" % (where, name))
+check("Am28F256/512/010/020: строка в обеих таблицах, 12 В, ro+why, в VPP126",
+      not bad, str(bad[:3]))
+
+# 8. ST M28F102 стирается только целиком: «сектор 64 КиБ» был вымыслом.
+bad = []
+for where, table in (("набор", D.GEOMETRY), ("пакет", C.CHIP_GEOMETRY)):
+    geo = table.get("M28F102") or {}
+    if geo.get("sector") != geo.get("size") or not geo.get("ro"):
+        bad.append((where, geo.get("size"), geo.get("sector"), geo.get("ro")))
+check("M28F102: сектор = вся ёмкость (поблочного стирания нет)", not bad,
+      str(bad))
+
+# 9. Один код 04h/ADh - одно имя во всех трёх источниках.
+reg = _json.loads((pathlib.Path(KIT) / "src" / "pcmcia_flash" / "data" /
+                   "jedec_registry.json").read_text(encoding="utf-8"))
+fuj = {"набор": D.FUJITSU_PARTS[0xAD][0],
+       "пакет": C.FUJITSU_PARTS[0xAD][0],
+       "реестр": reg["Fujitsu"]["0xAD"]["chip"]}
+check("04h/ADh -> одно имя (MBM29F016A) в наборе, базе и реестре",
+      set(fuj.values()) == {"MBM29F016A"}, str(fuj))
+
+# 10. ST: коды D5h/D6h раньше не проверялись ничем (в реестре раздела не было).
+st = []
+for code, name in ((0xD5, "M29F400BT"), (0xD6, "M29F400BB")):
+    key = "0x%02X" % code
+    if (reg.get("STMicroelectronics") or {}).get(key, {}).get("chip") != name:
+        st.append("реестр %s" % key)
+    if D.STMICRO_PARTS.get(code, ("",))[0] != name:
+        st.append("набор %s" % key)
+    if C.STMICRO_PARTS.get(code, ("",))[0] != name:
+        st.append("пакет %s" % key)
+check("ST D5h/D6h: реестр, набор и база называют M29F400BT/BB", not st, str(st))
+
+# 11. Один производитель - одно написание в поле manuf базы.
+manufs = {chip.get("manuf") for chip in
+          _json.loads((pathlib.Path(KIT) / "src" / "pcmcia_flash" / "data" /
+                       "chips.json").read_text(encoding="utf-8"))["chips"].values()}
+check("в базе нет двух написаний одного производителя (ST «ST» и «STMicroelectronics»)",
+      not ({"ST", "STMicroelectronics"} <= manufs), str(sorted(manufs)))
+
+# 12. Intel: таблица одна, и она совпадает с реестром.
+intel_db = {k: v[0] for k, v in C.INTEL_PARTS.items()}
+intel_mono = {k: v[0] for k, v in D.INTEL_PARTS.items()}
+intel_reg = {int(k, 16): v["chip"] for k, v in (reg.get("Intel") or {}).items()}
+check("Intel ID: набор, база и реестр совпадают",
+      intel_mono == intel_db == intel_reg,
+      str((intel_mono, intel_db, intel_reg)))
+
+# 13. В наборе был не один словарь Intel-кодов, а три разных; выдуманных кодов
+#     (A1h/A3h/A4h) больше нет ни в наборе, ни в базе.
+invented = sorted(c for c, table in ((0xA1, D.INTEL_PARTS), (0xA3, D.INTEL_PARTS),
+                                     (0xA4, D.INTEL_PARTS), (0xB5, C.INTEL_PARTS),
+                                     (0xB6, C.INTEL_PARTS)) if c in table)
+check("выдуманных Intel-кодов (A1h/A3h/A4h/B5h/B6h) нет ни в одной таблице",
+      not invented, str(invented))
+
+# 14. vpp_need: 3-вольтовой микросхеме Vpp не нужен вовсе, 5-вольтовой - 5 В,
+#     12-вольтовой - 12 В. Раньше любое имя из VPP5 отвечало «5 В», то есть
+#     3-вольтовым картам в отчёте обещали 5 В на Vpp.
+bad = []
+for name, volts in (("SST39VF040", 3), ("Am29LV040B", 3), ("28F320", 3),
+                    ("Am29F040", 5), ("Am29F016", 5), ("MBM29F016A", 5),
+                    ("28F008SA", 12), ("28F016SA", 12), ("Am28F010", 12),
+                    ("M28F102", 12)):
+    v_mono, _ = D.vpp_need({"product": [name]})
+    v_pkg, _ = C.vpp_need({"product": [name]})
+    if (v_mono, v_pkg) != (volts, volts):
+        bad.append((name, v_mono, v_pkg, volts))
+check("vpp_need по имени: 3 В -> 3, 5 В -> 5, 12 В -> 12 (обе реализации)",
+      not bad, str(bad[:4]))
+
+# 15. ...и по JEDEC ID тоже (Intel 89h в наборе раньше не было вовсе).
+bad = []
+for jedec, volts in (("89A2", 12), ("89A6", 5), ("01AD", 5), ("014F", 3)):
+    v_mono, _ = D.vpp_need({"jedec": jedec})
+    v_pkg, _ = C.vpp_need({"jedec": jedec})
+    if (v_mono, v_pkg) != (volts, volts):
+        bad.append((jedec, v_mono, v_pkg, volts))
+check("vpp_need по JEDEC ID: 89h/A2h = 12 В, 89h/A6h = 5 В, 01h/ADh = 5 В, 01h/4Fh = 3 В",
+      not bad, str(bad))
+
+# 16. Запись берёт вольты из vpp_need, а не из жёсткого «5 В»: 12-вольтовой
+#     карте (Intel 28F008SA/28F016SA, Am28F*) раньше подавалось 5 В.
+import inspect as _inspect
+src_main = _inspect.getsource(D._flash_main)
+check("в записи набора VPP берётся из vpp_need (нет жёсткого voltage=5)",
+      "vpp_need(info)" in src_main and "voltage=5" not in src_main
+      and "voltage=volts" in src_main,
+      "voltage=5 в _flash_main" if "voltage=5" in src_main else "нет vpp_need")
+
+# 16б. В отчёте 3-вольтовая карта не может называться «неизвестно», а Vpp не
+#      включается на 3 В: это разные вещи - «не знаю» и «не нужен».
+cli_texts = {}
+for where, rel in (("набор", "src/pcmcia_direct/cli.py"),
+                   ("пакет", "src/pcmcia_flash/cli.py")):
+    cli_texts[where] = (pathlib.Path(KIT) / rel).read_text(encoding="utf-8")
+check("обе CLI печатают 3 В как «Vpp не нужна», а не «неизвестно»",
+      all("Vpp не нужна (3 В)" in t for t in cli_texts.values()),
+      str([w for w, t in cli_texts.items() if "Vpp не нужна (3 В)" not in t]))
+flash_pkg = (pathlib.Path(KIT) / "src" / "pcmcia_flash" / "cli.py").read_text(
+    encoding="utf-8")
+flash_mono = (pathlib.Path(KIT) / "src" / "pcmcia_direct" / "flash.py").read_text(
+    encoding="utf-8")
+check("Vpp включается только на 5 В или 12 В (3 В не трогаем)",
+      "elif volts in (5, 12):" in flash_pkg and "elif volts in (5, 12):" in flash_mono,
+      "в одной из реализаций условие другое")
+
+# 17. Реестр больше не дублируется литералами: jedec_registry.py строится из JSON.
+reg_src = (pathlib.Path(KIT) / "src" / "pcmcia_flash" / "jedec_registry.py").read_text(
+    encoding="utf-8")
+check("jedec_registry.py не держит собственных кодов (источник - JSON)",
+      "AMD_ETALON = {" not in reg_src and "load_registry()" in reg_src,
+      "в модуле снова литеральные словари")
+
+# 18. Флаг «не сверено» одинаков в двух таблицах для общих имён.
+bad_unv = sorted(n for n in set(D.GEOMETRY) & set(C.CHIP_GEOMETRY)
+                 if bool(D.GEOMETRY[n].get("unverified"))
+                 != bool(C.CHIP_GEOMETRY[n].get("unverified")))
+check("флаг «не сверено» совпадает в двух таблицах для общих имён",
+      not bad_unv, str(bad_unv[:4]))
 
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)

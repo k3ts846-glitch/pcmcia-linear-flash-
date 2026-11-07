@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from .chip_db import (
-    CHIP_GEOMETRY, AMD_PARTS, FUJITSU_PARTS, INTEL_PARTS,
+    CHIP_GEOMETRY, AMD_PARTS, FUJITSU_PARTS, INTEL_PARTS, STMICRO_PARTS,
     VPP5, VPP126, PAGE_NONE,
 )
 from .addressing import chip_abs
@@ -29,11 +29,30 @@ from .constants import (
 from .errors import DirectError
 
 
+def _vpp_volts(name: str) -> int:
+    """Сколько вольт нужно на Vpp для имени из VPP5: 5 или 3 (не нужно вовсе).
+
+    2.18.2: до этого любое имя из VPP5 давало «5 В». Для 3-вольтовых
+    микросхем (SST39LF/VF, Am29LV*, TC58FVT*, 28F320/800B3/160B3 и т. п.)
+    это неверно: у них нет вывода Vpp, программирование идёт от Vcc
+    2.7-3.6 В (даташиты: SST DS20005023 «Single 2.7-3.6 V Read and Write
+    Operation», AMD Am29LV «3.0 V single power supply»). Поэтому вольты
+    берём из геометрии, а не из одного факта «имя в списке VPP5».
+    """
+    geo = CHIP_GEOMETRY.get(name) or {}
+    try:
+        volts = int(geo.get("volts") or 5)
+    except (TypeError, ValueError):
+        volts = 5
+    return 3 if volts <= 3 else 5
+
+
 def vpp_need(info):
-    """Сколько вольт программирования нужно карте: 5, 12 или 0 (неизвестно).
+    """Сколько вольт программирования нужно карте: 3, 5, 12 или 0 (неизвестно).
 
     Возвращает (вольт, откуда). Никогда не отвечает «12» только потому, что в
-    паспорте встретилось слово AMD.
+    паспорте встретилось слово AMD. 3 - микросхеме Vpp не нужен вовсе
+    (3-вольтовая, программируется от Vcc); 0 - по паспорту не определить.
     """
     j = (info or {}).get("jedec")
     if j and len(j) >= 4:
@@ -46,19 +65,25 @@ def vpp_need(info):
             if name in VPP126:
                 return 12, f"по JEDEC: {name} (Vpp 12 В выведен наружу)"
             if name in VPP5:
-                return 5, f"по JEDEC: {name} — семейство 5.0 V only, 12 В не нужно"
+                if _vpp_volts(name) == 3:
+                    return 3, (f"по JEDEC: {name} — 3-вольтовая, Vpp не нужна "
+                               "(программирование от Vcc 2.7-3.6 В)")
+                return 5, f"по JEDEC: {name} — 5.0 V only, 5 В на Vpp, 12 В не нужно"
         # Fujitsu MBM29F016A: JEDEC vendor ID 0x04, device 0xAD
         if vid == 0x04 and did in FUJITSU_PARTS:
             name = FUJITSU_PARTS[did][0]
             if name in VPP5:
-                return 5, f"по JEDEC: {name} — семейство 5.0 V only, 12 В не нужно"
+                return 5, f"по JEDEC: {name} — 5.0 V only, 5 В на Vpp, 12 В не нужно"
         # Intel: Manufacturer ID = 89h
         if vid == 0x89 and did in INTEL_PARTS:
             name = INTEL_PARTS[did][0]
             if name in VPP126:
                 return 12, f"по JEDEC: {name} (Vpp 12 В выведен наружу)"
             if name in VPP5:
-                return 5, f"по JEDEC: {name} — 3.3/5.0 В, 12 В не нужно"
+                if _vpp_volts(name) == 3:
+                    return 3, (f"по JEDEC: {name} — 3-вольтовая, Vpp не нужна "
+                               "(программирование от Vcc 2.7-3.6 В)")
+                return 5, f"по JEDEC: {name} — 5.0 V, 5 В на Vpp, 12 В не нужно"
     prod = " ".join((info or {}).get("product") or [])
     up = prod.upper()
     for name in VPP126:
@@ -66,6 +91,9 @@ def vpp_need(info):
             return 12, f"по строке паспорта: {name}"
     for name in VPP5:
         if name.upper() in up:
+            if _vpp_volts(name) == 3:
+                return 3, (f"по строке паспорта: {name} — 3-вольтовая, "
+                           "Vpp не нужна (программирование от Vcc 2.7-3.6 В)")
             return 5, f"по строке паспорта: {name}"
     if "SERIES 2" in up or "SERIES2" in up:
         return 0, (

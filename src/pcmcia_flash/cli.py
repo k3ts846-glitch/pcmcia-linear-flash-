@@ -426,7 +426,9 @@ def _flash_main(args):
             if volts and vpp.get("vpp") and volts != vpp.get("vpp"):
                 print(f"  ВНИМАНИЕ: по документации нужно {volts} В, "
                       f"а сейчас {vpp.get('vpp')} В ({why_v}).")
-        elif volts:
+        elif volts in (5, 12):
+            # 2.18.2: 3 В сюда не попадает - 3-вольтовой микросхеме Vpp не
+            # нужен, программирование идёт от Vcc 2.7-3.6 В.
             ok_vpp, msg_vpp = set_vpp_for_write(dev, voltage=volts,
                                                 exca_mem=mem,
                                                 exca_addr=exca)
@@ -797,6 +799,9 @@ def main(argv=None):
             print(f"  напряжение записи     : 5 В (12 В не нужно) — {vwhy}")
         elif v == 12:
             print(f"  напряжение записи     : 12 В (Vpp) — {vwhy}")
+        elif v == 3:
+            # 2.18.2: 3-вольтовой микросхеме Vpp не нужен вовсе.
+            print(f"  напряжение записи     : Vpp не нужна (3 В) — {vwhy}")
         else:
             print(f"  напряжение записи     : неизвестно — {vwhy}")
         if kind in ("serial", "parallel", "network"):
