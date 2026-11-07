@@ -728,16 +728,20 @@ check("MX29F1610: прежние 64 КиБ - отказ, сосед назван
 # честно: чип работает, но отчёт предупреждает, а src говорит, что сверки нет.
 # Am29PL320/640/1280 добавлены в 2.17.6: таких имён нет ни в flashchips.h, ни
 # в jedec_probe.c, то есть строка держалась на догадке.
+# 2.18.3: 28F016SV из набора вышел - нашёлся документ Intel (297349-003),
+# он подтверждает 32 блока по 64 КиБ и Vpp 5 В. Остальные 14 строк так и
+# остаются без документа, и это написано прямо в их src.
 UNVERIFIED = {"HN28F010", "HN28F020", "HN28F100",
-              "LH28F010", "LH28F020", "M28F016", "28F016SV",
+              "LH28F010", "LH28F020", "M28F016",
               "M5M29F010", "M5M29F020", "MX29F3210",
               "Am29PL320", "Am29PL640", "Am29PL1280",
               "Am29F032", "MBM29F033"}
 got = {n for n, g in D.GEOMETRY.items() if g.get("unverified")}
 check("помечены «не сверено» ровно %d строк" % len(UNVERIFIED),
       got == UNVERIFIED, str(sorted(got ^ UNVERIFIED)))
+HONEST = ("не сверен", "не подтверждено", "не нашли", "не сверили")
 dishonest = [n for n in sorted(UNVERIFIED)
-             if "не сверен" not in (D.GEOMETRY[n].get("src") or "")]
+             if not any(w in (D.GEOMETRY[n].get("src") or "") for w in HONEST)]
 check("у каждой непроверенной строки src говорит о недосверке",
       not dishonest, str(dishonest))
 both = [n for n in sorted(UNVERIFIED) if D.GEOMETRY[n].get("ambiguous")]
@@ -2230,11 +2234,13 @@ check("три новые строки: ёмкость, сектор 64 КиБ, 5
 
 sv_mono = D.GEOMETRY.get("28F016SV") or {}
 sv_pkg = C.CHIP_GEOMETRY.get("28F016SV") or {}
-check("28F016SV: в ОБЕИХ таблицах пометка «не сверено», числа совпадают",
-      bool(sv_mono.get("unverified")) and bool(sv_pkg.get("unverified"))
-      and sv_mono.get("size") == sv_pkg.get("size")
-      and sv_mono.get("sector") == sv_pkg.get("sector"),
-      (sv_mono.get("unverified"), sv_pkg.get("unverified")))
+check("28F016SV: сверен по документу Intel, в обеих таблицах без «не сверено»",
+      not sv_mono.get("unverified") and not sv_pkg.get("unverified")
+      and sv_mono.get("size") == sv_pkg.get("size") == 2 << 20
+      and sv_mono.get("sector") == sv_pkg.get("sector") == 64 << 10
+      and "297349" in (sv_mono.get("src") or ""),
+      (sv_mono.get("unverified"), sv_pkg.get("unverified"),
+       sv_mono.get("size"), sv_mono.get("sector")))
 
 # Списки Vpp нужны, чтобы по паспорту карты решить, подавать ли 12 В.
 # 3-вольтовым строкам Vpp не нужен вовсе, поэтому проверяем ровно те, кому он
@@ -2770,6 +2776,129 @@ bad_unv = sorted(n for n in set(D.GEOMETRY) & set(C.CHIP_GEOMETRY)
                  != bool(C.CHIP_GEOMETRY[n].get("unverified")))
 check("флаг «не сверено» совпадает в двух таблицах для общих имён",
       not bad_unv, str(bad_unv[:4]))
+
+
+# --- 2.18.3. «Не сверенные» строки и матрица HW_REQUIREMENTS -------------------
+# Раунд 2.18.2 свёл списки и имена, но 15 строк остались «не сверено» - и это
+# было не видно в HW_REQUIREMENTS.md, где они стояли как обычные поддерживаемые
+# микросхемы («68 chip geometries», Intel 28F008SA/016SA «Vpp not required»,
+# AT29F016/040/080, которых не существует). Теперь матрица в документе
+# собирается из таблиц, а тест читает её обратно и сверяет построчно.
+section("2.18.3: «не сверенные» строки, 20h только по документу, матрица HW_REQUIREMENTS")
+
+# 1. Неподтверждённая строка не может включать Unlock Bypass: 20h - команда,
+#    а правило набора - «не подтверждённую документом команду не посылать».
+bad = []
+for where, table in (("набор", D.GEOMETRY), ("пакет", C.CHIP_GEOMETRY)):
+    bad += ["%s/%s" % (where, n) for n, g in sorted(table.items())
+            if g.get("unverified") and g.get("bypass")]
+check("ни одна «не сверенная» строка не включает Unlock Bypass 20h", not bad,
+      str(bad[:4]))
+
+# 2. В документе 20h упоминается, только если он подтверждён: у нас это
+#    Am29F016D/Am29F032B (21444E5) и семейство DL/GL (даташиты AMD).
+bad = []
+for name in ("Am29F016", "MBM29F016A", "MX29F1610", "Am29F032", "MBM29F033",
+             "MX29F3210", "HN28F010", "M5M29F010", "Am29PL320"):
+    for where, table in (("набор", D.GEOMETRY), ("пакет", C.CHIP_GEOMETRY)):
+        g = table.get(name)
+        if g is not None and g.get("bypass"):
+            bad.append("%s/%s" % (where, name))
+check("у строк без документа на 20h попытка записи идёт обычной A0h", not bad,
+      str(bad[:4]))
+
+# 3. 28F016SV сверен документом Intel 297349-003: 2 МиБ, 32 блока по 64 КиБ,
+#    SmartVoltage (Vpp 5 или 12 В), x8/x16, CUI - надмножество 28F008SA.
+bad = []
+for where, table in (("набор", D.GEOMETRY), ("пакет", C.CHIP_GEOMETRY)):
+    g = table.get("28F016SV") or {}
+    if (g.get("size"), g.get("sector"), g.get("volts"), g.get("protocol"),
+            bool(g.get("wide")), bool(g.get("unverified"))) != (2 << 20, 64 << 10, 5,
+                                                                "intel", True, False):
+        bad.append((where, g.get("size"), g.get("sector"), g.get("volts"),
+                    g.get("protocol"), g.get("wide"), g.get("unverified")))
+check("28F016SV: 2 МиБ, 32 блока по 64 КиБ, Vpp 5 В, CUI - сверено с Intel 297349-003",
+      not bad, str(bad))
+
+# 4. MBM29F033C: документ нашёлся на имя с ревизией - держим сверенную строку,
+#    а имя без «C» оставляем с пометкой (как Am29F032 без «B»).
+bad = []
+for where, table in (("набор", D.GEOMETRY), ("пакет", C.CHIP_GEOMETRY)):
+    g = table.get("MBM29F033C") or {}
+    if (g.get("size"), g.get("sector"), g.get("volts"), bool(g.get("unverified")),
+            bool(g.get("bypass"))) != (4 << 20, 64 << 10, 5, False, False):
+        bad.append((where, g.get("size"), g.get("sector"), g.get("volts"),
+                    g.get("unverified"), g.get("bypass")))
+    if "MBM29F033C" not in (D.VPP5 if where == "набор" else C.VPP5):
+        bad.append("%s: нет в VPP5" % where)
+alias = D.GEOMETRY.get("MBM29F033") or {}
+if not alias.get("unverified") or alias.get("size") != 4 << 20:
+    bad.append("MBM29F033: alias сломан")
+check("MBM29F033C сверен (4 МиБ / 64 КиБ / 5 В), имя без «C» - alias «не сверено»",
+      not bad, str(bad[:4]))
+
+# 5. Матрица в HW_REQUIREMENTS собирается из таблицы набора: читаем её обратно
+#    и сверяем построчно. Так документ не может разойтись с данными молча.
+doc = (pathlib.Path(KIT) / "HW_REQUIREMENTS.md").read_text(encoding="utf-8")
+sec4 = doc[doc.index("## 4. Supported Flash Chips"):doc.index("## 5. Voltage Requirements")]
+
+
+def _human(n):
+    return ("%d MiB" % (n >> 20)) if n % (1 << 20) == 0 else ("%d KiB" % (n >> 10))
+
+
+rows, bad = [], []
+for line in sec4.splitlines():
+    if not line.startswith("| ") or line.startswith("| Chip |") or line.startswith("|--"):
+        continue
+    cells = [c.strip() for c in line.strip().strip("|").split("|")]
+    if len(cells) != 9:
+        bad.append("колонок %d: %s" % (len(cells), line[:60]))
+        continue
+    name = cells[0]
+    geo = D.GEOMETRY.get(name)
+    if not geo:
+        bad.append("%s: нет в таблице набора" % name)
+        continue
+    rows.append(name)
+    want = (_human(geo["size"]), _human(geo["sector"]),
+            "Intel CUI" if geo.get("protocol") == "intel" else "JEDEC",
+            "1 byte" if int(geo.get("page") or 1) <= 1 else "%d B" % int(geo["page"]),
+            "Yes" if geo.get("bypass") else "No",
+            {12: "12 V", 5: "5 V", 3: "3 V"}.get(geo.get("volts"),
+                                                   "%s V" % geo.get("volts")),
+            "read-only" if geo.get("ro") else "—",
+            "NOT VERIFIED" if geo.get("unverified") else "yes")
+    got = tuple(cells[1:])
+    if got != want:
+        bad.append("%s: %s != %s" % (name, got, want))
+check("матрица HW_REQUIREMENTS построчно совпадает с таблицей набора", not bad,
+      str(bad[:3]))
+check("в матрице HW_REQUIREMENTS есть все строки таблицы набора",
+      sorted(rows) == sorted(D.GEOMETRY), str(sorted(set(D.GEOMETRY) ^ set(rows))[:4]))
+
+# 6. Сводка в начале §4 не врёт про числа.
+check("HW_REQUIREMENTS называет верное число строк таблицы",
+      ("**%d rows**" % len(D.GEOMETRY)) in sec4, "нет «%d rows»" % len(D.GEOMETRY))
+check("HW_REQUIREMENTS называет верное число «не сверенных» строк",
+      ("%d — " % len([1 for g in D.GEOMETRY.values() if g.get("unverified")])) in sec4
+      and "NOT VERIFIED" in sec4,
+      "сводка §4 не совпадает с данными")
+
+# 7. Из документа ушли имена, которых нет в таблицах (AT29F016/040/080 не
+#    существуют, M28F016S5 - не строка, NEC - это Intel в керамике).
+ghosts = [w for w in ("AT29F016", "AT29F040", "AT29F080", "M28F016S5",
+                      "68 chip geometries", "Vpp not required")
+          if w in sec4]
+check("в §4 HW_REQUIREMENTS нет несуществующих имён и старых обещаний", not ghosts,
+      str(ghosts))
+
+# 8. §5 больше не утверждает, что Intel 12-вольтовым Vpp не нужен.
+sec5 = doc[doc.index("## 5. Voltage Requirements"):doc.index("## 6. Known Tested")]
+check("§5: у Intel 28F008SA/016SA назван Vpp 12 В",
+      "12 V" in sec5 and "28F008SA" in sec5
+      and "| Intel 28F010/28F020, 28F008SA, 28F016SA, M28F* | 5 V | **12 V** |" in sec5,
+      sec5[:120])
 
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)
