@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.14"          # версия набора: печатается в отчёте и в --selftest
+KIT_VERSION = "2.17.15"          # версия набора: печатается в отчёте и в --selftest
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -3190,14 +3190,27 @@ GEOMETRY = {
     # electrical chip-erasure»). Команды Sector Erase у этих
     # микросхем нет, поэтому цикл «стереть сектор - записать» к ним
     # неприменим.
-    "28F256": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                   size=32 << 10, volts=12, ambiguous=True,
-                   why="стирание только целиком (bulk erase, 12 В), команды Sector Erase нет",
-                   src="Intel 28F256: 32 KiB, первое поколение, 12 В; в каталоге Intel помечена как Bulk Erase - поблочно не стирается"),
-    "28F512": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                   size=64 << 10, volts=12, ambiguous=True,
-                   why="стирание только целиком (bulk erase, 12 В), команды Sector Erase нет",
-                   src="Intel 28F512: 64 KiB, первое поколение, 12 В; в каталоге Intel помечена как Bulk Erase - поблочно не стирается"),
+    # 2.17.15: 28F256/28F512 сверили по даташитам - у них ТОТ ЖЕ регистр
+    # команд, что у 28F010/28F020 (00h/90h/20h+20h/40h/A0h/C0h/FFh), и
+    # никаких 555h/2AAh. Раньше стояли AMD-адреса и не было ro: набор
+    # послал бы AA/55/A0 «в никуда» и отчитался бы об успехе.
+    "28F256": dict(sector=32 << 10, page=1, cmd=(0, 0), wide=False,
+                   size=32 << 10, volts=12, ambiguous=True, protocol="intel",
+                   ro=True,
+                   why="стирание только ВСЕГО чипа (20h+20h, нужны 12 В на Vpp) "
+                       "и нет статусного регистра 70h - набор её не пишет",
+                   src="Intel 28F256A (32K x 8, даташит 290243-006): команды "
+                       "00h/90h/20h+20h/40h/A0h/C0h/FFh, байт, 12 В +-5% на "
+                       "Vpp, блочного стирания нет, ID 89h/B9h; то же у AMD "
+                       "Am28F256 (11560) и ST M28F256"),
+    "28F512": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=False,
+                   size=64 << 10, volts=12, ambiguous=True, protocol="intel",
+                   ro=True,
+                   why="стирание только ВСЕГО чипа (20h+20h, нужны 12 В на Vpp) "
+                       "и нет статусного регистра 70h - набор её не пишет",
+                   src="Intel 28F512 (64K x 8): команды 00h/90h/20h+20h/40h/"
+                       "A0h/C0h/FFh, байт, 12 В +-5% на Vpp, блочного стирания "
+                       "нет, ID 89h/B8h; то же у TI TMS28F512A и CAT28F512"),
     # Сверено по даташиту Intel 290207-010 (28F010, ноябрь 1995). Важное:
     # это НЕ JEDEC-микросхема - никаких 555h/2AAh: команды пишутся в регистр
     # команд одним байтом (Read 00h, ID 90h, Erase 20h+20h, Program 40h+PA/PD,

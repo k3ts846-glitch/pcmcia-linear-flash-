@@ -1648,6 +1648,93 @@ st_left = {c: s for c, s in getattr(card_p2, "_st", {}).items() if s != "idle"}
 check("после записи оба чипа вернулись в состояние idle", not st_left, st_left)
 
 
+# --- 22. 28F256/28F512: регистр команд, а не AMD-циклы 555h/2AAh -----------
+# Обе строки держались на догадке «12-вольтовая, значит как Am29F016»: в них
+# стояли JEDEC-адреса команд (555h/2AAh) и НЕ было флага ro. Сверили по пяти
+# независимым документам - и все они совпадают:
+#  * Intel 28F256A (290243-006): 00h чтение, 90h ID (0000h=89h, 0001h=B9h),
+#    20h+20h стирание ВСЕГО чипа, A0h проверка стирания, 40h+PA/PD запись,
+#    C0h проверка записи, FFh сброс; блочного стирания нет, 12 В +-5% на Vpp;
+#  * AMD Am28F256 (публикация 11560): та же таблица, «the entire chip is bulk
+#    erased»;
+#  * ST M28F256: 90h, 20h+20h, A0h, 40h, C0h - та же семья;
+#  * Intel 28F512 (64K x 8): те же команды, ID 89h/B8h, «Flash Electrical
+#    Chip-Erase» (только чип), 12 В;
+#  * TI TMS28F512A и Catalyst CAT28F512: те же коды (B8h).
+# Значит, как и у 28F010/28F020 (раздел 18), цикла «стереть сектор - записать»
+# здесь нет, и единственное честное поведение - только чтение.
+section("28F256/28F512: CUI Intel, стирание только целиком, только чтение")
+bad = []
+for name, size, did in (("28F256", 32 << 10, "B9h"), ("28F512", 64 << 10, "B8h")):
+    geo = D.GEOMETRY.get(name)
+    if not geo:
+        bad.append("%s нет в GEOMETRY" % name)
+        continue
+    if not geo.get("ro"):
+        bad.append("%s: не помечен ro" % name)
+    if geo.get("protocol") != "intel":
+        bad.append("%s: protocol %s" % (name, geo.get("protocol")))
+    if tuple(geo["cmd"]) != (0, 0):
+        bad.append("%s: cmd %s вместо (0, 0)" % (name, geo["cmd"]))
+    if geo.get("size") != size or geo.get("sector") != size:
+        bad.append("%s: size %s, sector %s (стирается только весь чип)"
+                   % (name, geo.get("size"), geo.get("sector")))
+    if geo.get("volts") != 12:
+        bad.append("%s: volts %s" % (name, geo.get("volts")))
+    if did not in str(geo.get("src") or ""):
+        bad.append("%s: в src нет ID %s" % (name, did))
+check("28F256/512: ro, CUI, cmd (0,0), сектор = весь чип, 12 В, ID в src",
+      not bad, str(bad[:3]))
+
+bad = [(n, g.get("size"), g.get("sector")) for n, g in D.GEOMETRY.items()
+       if (g.get("sector") or 0) > (g.get("size") or 0)]
+check("GEOMETRY: сектор ни у одной строки не больше ёмкости чипа", not bad,
+      str(bad[:3]))
+
+# Две таблицы (монолит и пакет) описывают одни и те же имена - значит обязаны
+# совпадать: иначе одна реализация сотрёт блок, а другая возьмёт иной размер.
+# protocol=None и "jedec" - одно и то же; адреса команд значимы только у JEDEC
+# (у Intel-семьи команда идёт в нулевой адрес, cmd остаётся справочным полем).
+bad = []
+common = sorted(set(C.CHIP_GEOMETRY) & set(D.GEOMETRY))
+for name in common:
+    g, p = D.GEOMETRY[name], C.CHIP_GEOMETRY[name]
+    gp, pp = g.get("protocol") or "jedec", p.get("protocol") or "jedec"
+    if gp != pp:
+        bad.append("%s: protocol %s / %s" % (name, gp, pp))
+        continue
+    trio_g = (g.get("size"), g.get("sector"), g.get("volts"))
+    trio_p = (p.get("size"), p.get("sector"), p.get("volts"))
+    if trio_g != trio_p:
+        bad.append("%s: size/sector/volts %s / %s" % (name, trio_g, trio_p))
+    flags_g = (bool(g.get("wide")), bool(g.get("bypass")), bool(g.get("ro")),
+               g.get("page") or 1)
+    flags_p = (bool(p.get("wide")), bool(p.get("bypass")), bool(p.get("ro")),
+               p.get("page") or 1)
+    if flags_g != flags_p:
+        bad.append("%s: wide/bypass/ro/page %s / %s" % (name, flags_g, flags_p))
+    if gp == "jedec" and tuple(g.get("cmd") or ()) != tuple(p.get("cmd") or ()):
+        bad.append("%s: cmd %s / %s" % (name, tuple(g.get("cmd") or ()),
+                                        tuple(p.get("cmd") or ())))
+check("GEOMETRY и chips.json: %d общих имён совпадают по геометрии" % len(common),
+      not bad and len(common) > 60, str(bad[:3]))
+
+# Поведение на модели: ro обязан дойти до NorFlash, а массив - остаться целым.
+card_r, _bus_r, flash_r = NM.make(kit=KIT, chips=1, chip_name="28F512",
+                                  blank=False)
+before_r = bytes(card_r.mem[0][:64])
+ans_r = [flash_r.program_byte(0, 0x5A), flash_r.erase_sector(0),
+         flash_r.erase_chip()]
+check("28F512 (модель): запись/сектор/чип - отказ, массив не тронут",
+      all(not ok for ok, _w in ans_r) and bytes(card_r.mem[0][:64]) == before_r,
+      (ans_r[0][1][:60], bytes(card_r.mem[0][:4]).hex()))
+why_r = ans_r[0][1]
+check("28F512 (модель): причина - «не выполняется», 12 В на Vpp, стирание целиком",
+      "не выполняется" in why_r and "Vpp" in why_r and "ВСЕГО чипа" in why_r,
+      why_r[:90])
+
+
+
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)
 print("ИТОГО: прошло %d, провалено %d" % (len(PASS), len(FAIL)))
