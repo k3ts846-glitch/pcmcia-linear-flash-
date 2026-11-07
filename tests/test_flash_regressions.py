@@ -693,7 +693,7 @@ check("MX29F1610: прежние 64 КиБ - отказ, сосед назван
 # Am29PL320/640/1280 добавлены в 2.17.6: таких имён нет ни в flashchips.h, ни
 # в jedec_probe.c, то есть строка держалась на догадке.
 UNVERIFIED = {"HN28F010", "HN28F020", "HN28F100",
-              "LH28F010", "LH28F020", "M28F008", "M28F016",
+              "LH28F010", "LH28F020", "M28F016",
               "M5M29F010", "M5M29F020", "MX29F3210",
               "Am29PL320", "Am29PL640", "Am29PL1280",
               "Am29F032", "MBM29F033"}
@@ -1948,6 +1948,61 @@ check("D28F010: открытие по имени отвергается с об�
       "ВСЕГО чипа" in refuse_d and "Vpp" in refuse_d, refuse_d[:80])
 
 
+
+# --- 25. M28F008/M28F016: Intel военной серии (CUI), а не ST с 555h/2AAh ---
+# Аудит 2.17.18. Обе строки числились за ST и стояли с адресами 555h/2AAh при
+# 12 В. Справочники относят M28F008 к Intel («INTEL - 8 MBIT (1 MBIT x 8) FLASH
+# MEMORY», 28 страниц; у Rochester то же описание с «Extended Cycling
+# Capability»), а архитектура у него как у 28F008SA: 16 блоков по 64 КиБ,
+# CUI + статусный регистр, 12 В на Vpp, команда байтом. Документ MS28F016SV
+# перечисляет M28F008 среди совместимых по набору команд («Backwards-Compatible
+# with VE28F008, M28F008 and 28F016SA Command Set»). Для M28F016 точного имени
+# в перечнях Intel не нашлось, поэтому пометка «не сверено» осталась; но 16-
+# Мбит x8 части этой семьи (28F016SA/MS28F016SV) - CUI, и адреса JEDEC у
+# 12-вольтовой Intel-строки были бы заведомо ложью.
+section("M28F008/M28F016: Intel военной серии (CUI), а не ST с 555h/2AAh")
+
+geo_sa25 = D.GEOMETRY["28F008SA"]
+geo_m8 = D.GEOMETRY["M28F008"]
+bad_m8 = []
+if geo_m8.get("protocol") != "intel":
+    bad_m8.append("protocol=%s" % geo_m8.get("protocol"))
+if tuple(geo_m8.get("cmd") or ()) != (0, 0):
+    bad_m8.append("cmd=%s" % (geo_m8.get("cmd"),))
+if geo_m8.get("unverified"):
+    bad_m8.append("unverified")
+diff_m8 = [(k, geo_m8.get(k), geo_sa25.get(k)) for k in
+           ("size", "sector", "volts", "page", "protocol")
+           if geo_m8.get(k) != geo_sa25.get(k)]
+if diff_m8 or bool(geo_m8.get("wide")) != bool(geo_sa25.get("wide")):
+    bad_m8.append("расходится с 28F008SA: %s wide=%s/%s"
+                  % (diff_m8, geo_m8.get("wide"), geo_sa25.get("wide")))
+check("M28F008: CUI, cmd (0,0), геометрия как у 28F008SA, «не сверено» снято",
+      not bad_m8, str(bad_m8[:3]))
+
+card_m8, _bus_m8, flash_m8 = NM.make(kit=KIT, chips=1, chip_name="M28F008",
+                                     blank=True)
+ok_w8 = flash_m8.program_byte(0x100, 0x5A)
+ok_r8 = flash_m8.read(0x100, 2) == b"\x5a\xff"
+ok_e8 = flash_m8.erase_sector(0)
+ok_z8 = flash_m8.read(0x100, 2) == b"\xff\xff"
+check("M28F008 (модель): запись байта и стирание блока идут путём Intel CUI",
+      flash_m8.protocol == "intel" and ok_w8[0] and ok_r8 and ok_e8[0] and ok_z8,
+      (flash_m8.protocol, ok_w8, ok_e8, flash_m8.read(0x100, 2).hex()))
+
+geo_m16 = D.GEOMETRY["M28F016"]
+src_m16 = str(geo_m16.get("src") or "")
+check("M28F016: CUI и cmd (0,0), пометка «не сверено» осталась (имя не найдено)",
+      geo_m16.get("protocol") == "intel"
+      and tuple(geo_m16.get("cmd") or ()) == (0, 0)
+      and bool(geo_m16.get("unverified")) and "28F016SA" in src_m16,
+      (geo_m16.get("protocol"), geo_m16.get("cmd"),
+       geo_m16.get("unverified"), src_m16[:60]))
+
+bad_st25 = [n for n in ("M28F008", "M28F016")
+            if "ST M28F0" in str(D.GEOMETRY[n].get("src") or "")]
+check("M28F008/M28F016: ни одна строка больше не выдаёт себя за ST",
+      not bad_st25, str(bad_st25))
 
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)

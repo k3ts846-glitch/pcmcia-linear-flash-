@@ -96,8 +96,9 @@ def _build_geometry(chips: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "notes": chip.get("notes", ""),
             "why": chip.get("why", ""),
             # Строка есть, но её параметры не сверены с даташитом: чип рабочий,
-            # отчёт обязан об этом предупредить (в монолите такие строки уже
-            # есть - HN28F*, LH28F*, D28F*, M28F008/016, M5M29F*, MX29F3210).
+            # отчёт обязан об этом предупредить (в монолите такие строки ещё
+            # есть - HN28F*, LH28F*, M28F016, M5M29F*, MX29F3210, Am29PL*,
+            # Am29F032, MBM29F033; D28F* и M28F008 сверены в 2.17.17/2.17.18).
             "unverified": bool(chip.get("unverified", False)),
         }
     return geometry
