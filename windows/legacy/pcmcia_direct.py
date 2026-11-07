@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.19"          # версия набора: печатается в отчёте и в --version
+KIT_VERSION = "2.17.20"          # версия набора: печатается в отчёте и в --version
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
