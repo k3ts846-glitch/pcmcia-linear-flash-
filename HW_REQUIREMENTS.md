@@ -1,4 +1,4 @@
-# Hardware Requirements — PCMCIA FLASH KIT 2.18.3
+# Hardware Requirements — PCMCIA FLASH KIT 2.18.4
 
 Supported hardware configuration for the notebook side (Linux laptop with PCMCIA/CardBus slot).
 

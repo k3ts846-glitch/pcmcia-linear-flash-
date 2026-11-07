@@ -100,6 +100,18 @@
     "0xB4": {
       "chip": "28F010",
       "source": "Intel 28F010 (даташит 290207-010), Intelligent Identifier: manufacturer 89h, device B4h; читается командой 90h"
+    },
+    "0xB8": {
+      "chip": "28F512",
+      "source": "Intel 28F512 (order 290204-008; A28F512 - 290265-004): Intelligent Identifier - manufacturer 89h, device B8h; те же коды у Catalyst CAT28F512 (свой вендор-код 31h)"
+    },
+    "0xB9": {
+      "chip": "28F256",
+      "source": "Intel 28F256A (order 290243-006): Intelligent Identifier - manufacturer 89h, device B9h; строка таблицы названа без суффикса «A»"
+    },
+    "0xBD": {
+      "chip": "28F020",
+      "source": "Intel 28F020 (order 290245-009 и 290245-007): Intelligent Identifier - manufacturer 89h, device BDh"
     }
   },
   "manufacturer_ids": {

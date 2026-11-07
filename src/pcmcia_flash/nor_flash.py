@@ -469,11 +469,14 @@ class NorFlashStatus:
     def read_id(self):
         """JEDEC ID: (производитель, устройство) или (None, None)."""
         if self.protocol == "intel":
-            chip = 0
-            self.bus.wr_many(chip_abs(0, chip, self.chips),
-                             bytes([INTEL_CUI_READ_ID, INTEL_CUI_READ_ID]))
-            man = self.read_byte(chip_abs(0, chip, self.chips))
-            dev = self.read_byte(chip_abs(1, chip, self.chips))
+            # 2.18.4: команда - ПО БАЙТУ НА ЧИП (см. _intel_send). Здесь до
+            # этого раунда стояли два байта 90h подряд: на карте с парой
+            # чипов это было верно, а на карте с ОДНИМ чипом второй байт
+            # уходил уже в следующий адрес, и ID не читался (модель такие
+            # команды отвергает: "команда + данные").
+            self._intel_send(0, INTEL_CUI_READ_ID)
+            man = self.read_byte(chip_abs(0, 0, self.chips))
+            dev = self.read_byte(chip_abs(1, 0, self.chips))
             self.reset()
             return man, dev
         self.unlock()
