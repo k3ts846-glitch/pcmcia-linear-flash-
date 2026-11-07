@@ -288,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
                 break
     except OSError:
         pass
-    say(f"  версия набора: {kit_version}   (в переписке должна быть 2.18.0)")
+    say(f"  версия набора: {kit_version}   (в переписке должна быть 2.18.1)")
     try:
         md5_direct = subprocess.run(
             ["md5sum", str(pcmcia_direct)], capture_output=True, text=True

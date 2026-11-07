@@ -1753,6 +1753,77 @@ for name in common:
 check("GEOMETRY и chips.json: %d общих имён совпадают по геометрии" % len(common),
       not bad and len(common) > 60, str(bad[:3]))
 
+# --- 2.18.1: пять проверенных по даташитам имён перенесены в базу пакета ----
+section("chips.json: SST39VF010/020/080, MBM29F016A и MX29F1610")
+
+# Ёмкость, сектор (КиБ) и напряжение - из даташитов (см. notes в chips.json):
+#   SST DS20005023 - SST39VF010/020: uniform 4 KByte sectors, 2.7-3.6 В;
+#   SST S71146 EOL - SST39VF080: 8 Mbit (1M x8), 256 секторов по 4 КиБ;
+#   Fujitsu MBM29F016A (43 стр.) - 2 M байт = 32 сектора по 64 КБ, 5.0 V-Only;
+#   Macronix MX29F1610 - «16 equal sectors of 128k bytes each», 5 В +-10%.
+MOVED = {
+    "SST39VF010": (128, 4, 3),
+    "SST39VF020": (256, 4, 3),
+    "SST39VF080": (1024, 4, 3),
+    "MBM29F016A": (2048, 64, 5),
+    "MX29F1610": (2048, 128, 5),
+}
+absent = [n for n in MOVED if n not in C.CHIP_GEOMETRY]
+check("в базе пакета есть все 5 перенесённых имён", not absent, str(absent))
+wrong = []
+for name, (size_kib, sector_kib, volts) in MOVED.items():
+    geo_p = C.CHIP_GEOMETRY.get(name) or {}
+    if (geo_p.get("size") != size_kib << 10
+            or geo_p.get("sector") != sector_kib << 10
+            or geo_p.get("volts") != volts):
+        wrong.append("%s: %s" % (name, (geo_p.get("size"), geo_p.get("sector"),
+                                        geo_p.get("volts"))))
+check("перенесённые строки совпадают с даташитами (ёмкость/сектор/напряжение)",
+      not wrong, str(wrong[:3]))
+
+# Unlock Bypass 20h: у SST39VF и MX29F1610 такой команды в таблицах команд нет,
+# у Fujitsu MBM29F016A документом не подтверждена. bypass=True заставил бы
+# набор посылать 20h, которой нет: запись откатывалась бы на A0h с
+# предупреждением. У AMD Am29F016 20h подтверждён (18805) - там True и остаётся.
+bad_bypass = []
+for name, geo_p in C.CHIP_GEOMETRY.items():
+    if geo_p.get("manuf") in ("SST", "Macronix") and geo_p.get("bypass"):
+        bad_bypass.append(name)
+check("SST и Macronix: unlock bypass не обещан без даташита", not bad_bypass,
+      str(bad_bypass))
+no_bypass = [n for n in ("MBM29F016", "MBM29F016A") 
+             if C.CHIP_GEOMETRY.get(n, {}).get("bypass")
+             or D.GEOMETRY.get(n, {}).get("bypass")]
+check("Fujitsu MBM29F016/016A: выдуманного bypass нет ни в одной таблице",
+      not no_bypass, str(no_bypass))
+# И обратная сторона: там, где 20h подтверждён документом, bypass обязан быть.
+# Am29F016 - False осознанно (даташит 18805: «Unlock Bypass появился только в
+# ревизии D»), Am29F016D и Am29F032B - True (21444E5).
+no_flag = [n for n in ("Am29F016D", "Am29F032B")
+           if not (C.CHIP_GEOMETRY.get(n, {}).get("bypass")
+                   and D.GEOMETRY.get(n, {}).get("bypass"))]
+check("AMD Am29F016D/Am29F032B: bypass остался (даташит 21444E5)", not no_flag,
+      str(no_flag))
+check("AMD Am29F016: bypass не обещан (20h только с ревизии D)",
+      not C.CHIP_GEOMETRY.get("Am29F016", {}).get("bypass")
+      and not D.GEOMETRY.get("Am29F016", {}).get("bypass"))
+
+# Одна и та же микросхема под двумя именами: геометрия обязана совпадать.
+g_a = C.CHIP_GEOMETRY.get("MBM29F016") or {}
+g_b = C.CHIP_GEOMETRY.get("MBM29F016A") or {}
+check("MBM29F016 и MBM29F016A описаны одинаково (одна микросхема, два имени)",
+      (g_a.get("size"), g_a.get("sector"), g_a.get("volts"))
+      == (g_b.get("size"), g_b.get("sector"), g_b.get("volts")))
+
+# Остаток расхождения: 12 имён только в наборе, и все - заведомо не перенесённые
+# (unverified) или отказ по документу (Am29F033: у AMD нет такой 5-вольтовой).
+only_direct = sorted(set(D.GEOMETRY) - set(C.CHIP_GEOMETRY))
+loose = [n for n in only_direct
+         if not (D.GEOMETRY[n].get("unverified") or D.GEOMETRY[n].get("why"))]
+check("имён только в наборе ровно 12, и все помечены (не сверены или отказ)",
+      len(only_direct) == 12 and not loose,
+      "%d: %s" % (len(only_direct), str(loose[:3]) or str(only_direct)))
+
 # Поведение на модели: ro обязан дойти до NorFlash, а массив - остаться целым.
 card_r, _bus_r, flash_r = NM.make(kit=KIT, chips=1, chip_name="28F512",
                                   blank=False)
