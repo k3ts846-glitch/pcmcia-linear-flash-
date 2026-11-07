@@ -44,9 +44,15 @@ def stubs():
 
     def mk(name, body):
         p = os.path.join(STUB, name)
-        with open(p, "w") as f:
+        # Прямая перезапись исполняемого файла даёт ETXTBSY («Text file busy»),
+        # если прошлый поддельный процесс ещё жив: так упал extras в CI
+        # 2026-11-07. Пишем свежий файл и заменяем им старый - работающий
+        # процесс остаётся на прежнем inode и не мешает.
+        fresh = p + ".new"
+        with open(fresh, "w") as f:
             f.write("#!/bin/bash\n" + body + "\n")
-        os.chmod(p, 0o755)
+        os.chmod(fresh, 0o755)
+        os.replace(fresh, p)
 
     mk("mtd_debug", f'''
 echo "mtd_debug $*" >> "{CALLS}"

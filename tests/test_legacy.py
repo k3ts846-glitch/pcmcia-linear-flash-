@@ -51,8 +51,15 @@ def section(title):
 
 
 def read(rel):
-    with open(os.path.join(KIT, rel), encoding="utf-8") as handle:
-        return handle.read()
+    """Прочитать файл набора. Часть старых .txt — в cp1251, а не в UTF-8."""
+    with open(os.path.join(KIT, rel), "rb") as handle:
+        raw = handle.read()
+    for encoding in ("utf-8", "cp1251"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", "replace")
 
 
 def files_in_legacy():
@@ -153,6 +160,22 @@ release = read("tests/release.py")
 check("текст выпуска не советует ПУСК.cmd и PowerShell-сценарии",
       "ПУСК.cmd" not in release and "kit_sync.ps1" not in release
       and "kit_state.ps1" not in release, "")
+
+# Инструкции, которые читает человек перед работой (не история выпусков:
+# README.md и ПЛАН_РАЗВИТИЯ_2.17.md рассказывают, как было, - им можно).
+GUIDES = ("ИНСТРУКЦИЯ.md", "README_FIRST.txt", "ПОРЯДОК_ЗАПУСКА.txt",
+          "КАК_УПРАВЛЯТЬ_С_WINDOWS.txt", "00_READ_ME_RU.txt")
+stale_guides = []
+for name in GUIDES:
+    if not os.path.isfile(os.path.join(KIT, name)):
+        stale_guides.append(name + " (нет файла)")
+        continue
+    body = read(name)
+    for gone in GONE:
+        if gone in body:
+            stale_guides.append("%s: %s" % (name, gone))
+check("инструкции не советуют запускать удалённые файлы", not stale_guides,
+      str(stale_guides))
 
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)
