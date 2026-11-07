@@ -12,74 +12,42 @@
     * Linux kernel drivers/mtd/chips/jedec_probe.c
     * AMD datasheets pub#16736 (Am29F010), pub#17113 (Am29F040), pub#20375B (Am29F800),
       pub#20637A (Am29F200), AN943 (Am29F400)
-    * Fujitsu datasheet DS05-20807-3E (MBM29F016)
+    * Fujitsu datasheet DS05-20807-3E (MBM29F016A; 2.18.2: имя сведено к этому)
     * Intel datasheets 28F008SA / 28F016SA
     * CNC-LAB ID code table (03.05.2016)
 
-При изменении любого ID в chips.py должен обновиться и этот реестр.
+При изменении любого ID в chips.json должен обновиться и реестр
+(data/jedec_registry.json) - это единственный источник: словари этого модуля
+строятся из него при импорте (2.18.2).
 Функция validate_jedec_ids() проверяет соответствие при импорте модуля chips.
 """
 
+from .chip_db import load_registry
 from .errors import DirectError
 
-# (Device ID, имя в CHIP_GEOMETRY, источник)
-AMD_ETALON = {
-    0x20: ("Am29F010",   "AMD pub#16736 Rev.G, Device ID = 20H"),
-    0x22: ("Am29DL322",  "AMD datasheet, Device ID = 22H"),
-    0x23: ("Am29F400AT", "AMD AN943, Device ID = 23H"),
-    0x3D: ("Am29F017D",  "Linux kernel jedec_probe.c, AM29F017D 0x003D"),
-    0x41: ("Am29F032B",  "Linux kernel jedec_probe.c, AM29F032B 0x0041"),
-    0x4F: ("Am29LV040B", "Linux kernel jedec_probe.c, AM29LV040B 0x004F"),
-    0x51: ("Am29F200AT", "AMD pub#20637 Rev.A, Device ID = 51H"),
-    0x57: ("Am29F200AB", "AMD pub#20637 Rev.A, Device ID = 57H"),
-    0x58: ("Am29F800BB", "AMD pub#20375B, Device ID = 58H"),
-    0x6D: ("Am29LV001BB","flashrom flashchips.h, AMD_AM29LV001BB 0x6D"),
-    0xA4: ("Am29F040",   "AMD pub#17113 Rev.D, Device ID = A4H"),
-    0xAB: ("Am29F400AB", "AMD AN943, Device ID = ABH"),
-    0xAD: ("Am29F016",   "AMD datasheet, Device ID = ADH"),
-    0xBA: ("Am29F080B",  "пользовательский даташот AM29F080B.PDF, Device ID = BAH"),
-    0xD5: ("Am29F080",   "flashrom flashchips.h AMD_AM29F080, Device ID = D5H"),
-    0xD6: ("Am29F800BT", "AMD pub#20375B, Device ID = D6H"),
-    0xED: ("Am29LV001BT","flashrom flashchips.h, AMD_AM29LV001BT 0xED"),
-}
+# 2.18.2: реестр был ДВАЖДЫ - этот модуль с литеральными словарями и
+# data/jedec_registry.json, который читает chip_db. Правки делали в одном
+# месте из двух, и «эталон» подтверждал сам себя (проверка в тестах так и
+# называлась). Теперь источник один - JSON; словари ниже строятся из него при
+# импорте, поэтому разъехаться они уже не могут. Источники по каждому коду
+# (даташиты, flashrom, jedec_probe.c) лежат в самом JSON, в поле "source".
+REGISTRY = load_registry()
 
-# Fujitsu: Manufacturer ID = 04h
-FUJITSU_ETALON = {
-    0xAD: ("MBM29F016",  "Fujitsu DS05-20807-3E, Device ID = ADH (vendor 04h)"),
-    0xA4: ("MBM29F040C", "Fujitsu MBM29F040C, Device ID = A4H (vendor 04h)"),
-}
 
-# Intel: Device ID читается через CUI Read ID (90h)
-#
-# Сверено с двумя независимыми таблицами: flashrom include/flashchips.h и
-# drivers/mtd/chips/jedec_probe.c из ядра Linux.
-#   0xA0 - flashrom: INTEL_28F016SV «28F016SA/SV»; ядро: I28F016S5 0x00a0.
-#          Ёмкость и раскладка у них одинаковые (2 МиБ, 32 блока по 64 КиБ),
-#          поэтому имя берём из своей таблицы - 28F016SV.
-#   0xA2 - обе таблицы: 28F008SA (1 МиБ, 16 блоков).
-#   0xA6 - ядро: I28F008S5 0x00a6; flashrom: «28F008S3/S5/SC» (1 МиБ).
-#   0xA7 - flashrom: INTEL_28F004S3 «28F008S3/S5/SC» (0.5 МиБ, 8 блоков).
-# Прежние записи 0xA6 -> 28F016SV, 0xB5 -> 28F002SA и 0xB6 -> 28F004SA были
-# выдуманы: 28F002SA/28F004SA не существуют, а 0xB5/0xB6 в ядре - это SST
-# SST39SF010A/SST39SF020A (производитель BFh, не 89h). Их убрали, чтобы
-# реестр не подтверждал сам себя.
-INTEL_ETALON = {
-    0xA0: ("28F016SV", "flashrom flashchips.h INTEL_28F016SV 0xA0 («28F016SA/SV»); "
-                       "ядро jedec_probe.c: тот же A0h у 28F016S5"),
-    0xA2: ("28F008SA", "flashrom flashchips.h INTEL_28F008SA 0xA2; "
-                       "ядро jedec_probe.c I28F008SA 0x00a2"),
-    0xA6: ("28F008S5", "ядро jedec_probe.c I28F008S5 0x00a6; "
-                       "flashrom: 0xA6 = 28F008S3/S5/SC"),
-    0xA7: ("28F004S5", "flashrom flashchips.h: 0xA7 = 28F004S3/S5/SC "
-                       "(байтовые Smart 3/5, 8 блоков по 64 КиБ)"),
-}
+def _etalon(vendor: str) -> dict:
+    """{Device ID: (имя, источник)} для раздела реестра."""
+    return {int(code, 16): (info["chip"], info.get("source", ""))
+            for code, info in (REGISTRY.get(vendor) or {}).items()}
+
+
+AMD_ETALON = _etalon("AMD")
+FUJITSU_ETALON = _etalon("Fujitsu")
+INTEL_ETALON = _etalon("Intel")
+ST_ETALON = _etalon("STMicroelectronics")
 
 # Производители JEDEC (Manufacturer ID)
-MANUFACTURER_IDS = {
-    0x01: "AMD",
-    0x04: "Fujitsu",
-    0x89: "Intel",
-}
+MANUFACTURER_IDS = {int(code, 16): name
+                   for code, name in (REGISTRY.get("manufacturer_ids") or {}).items()}
 
 
 def validate_jedec_ids(chip_geometry, amd_parts, fujitsu_parts, intel_parts):
@@ -176,6 +144,6 @@ def validate_jedec_ids(chip_geometry, amd_parts, fujitsu_parts, intel_parts):
 
 
 __all__ = [
-    "AMD_ETALON", "FUJITSU_ETALON", "INTEL_ETALON", "MANUFACTURER_IDS",
-    "validate_jedec_ids",
+    "AMD_ETALON", "FUJITSU_ETALON", "INTEL_ETALON", "ST_ETALON",
+    "MANUFACTURER_IDS", "REGISTRY", "validate_jedec_ids",
 ]

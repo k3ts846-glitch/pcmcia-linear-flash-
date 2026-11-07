@@ -72,8 +72,8 @@
   },
   "Fujitsu": {
     "0xAD": {
-      "chip": "MBM29F016",
-      "source": "Fujitsu DS05-20807-3E, Device ID = ADH (vendor 04h)"
+      "chip": "MBM29F016A",
+      "source": "Fujitsu DS05-20807-3E (MBM29F016A, 16M (2M x 8) BIT), Device ID = ADH при vendor 04h; отдельного документа на имя без «A» нет - 2.18.2 свёл запись к имени из даташита"
     },
     "0xA4": {
       "chip": "MBM29F040C",
@@ -96,11 +96,26 @@
     "0xA7": {
       "chip": "28F004S5",
       "source": "flashrom flashchips.h: 0xA7 = 28F004S3/S5/SC (байтовые Smart 3/5)"
+    },
+    "0xB4": {
+      "chip": "28F010",
+      "source": "Intel 28F010 (даташит 290207-010), Intelligent Identifier: manufacturer 89h, device B4h; читается командой 90h"
     }
   },
   "manufacturer_ids": {
     "0x01": "AMD",
     "0x04": "Fujitsu",
-    "0x89": "Intel"
+    "0x89": "Intel",
+    "32": "STMicroelectronics"
+  },
+  "STMicroelectronics": {
+    "0xD5": {
+      "chip": "M29F400BT",
+      "source": "ST M29F400BT/M29F400BB: Electronic Signature M29F400BT = D5h, vendor 20h (top boot)"
+    },
+    "0xD6": {
+      "chip": "M29F400BB",
+      "source": "ST M29F400BT/M29F400BB: Electronic Signature M29F400BB = D6h, vendor 20h (bottom boot)"
+    }
   }
 }

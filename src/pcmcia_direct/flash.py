@@ -8,7 +8,8 @@ import sys
 import time
 
 from .bridge import PAGE, _bridge_ctx, choose_window, open_best_mem, restore_window, snapshot_window, window_span
-from .chips import check_sector_map, chip_name_from_info, geometry_for, identify_chip, sector_map
+from .chips import (check_sector_map, chip_name_from_info, geometry_for,
+                    identify_chip, sector_map, vpp_need)
 from .cis import cis_location, read_cis
 from .errors import DirectError
 from .image import card_geometry
@@ -778,17 +779,31 @@ def _flash_main(args):
                 print(f"  {text}{tail}", flush=True)
 
         # --- VPP: проверяем и включаем программирующее напряжение перед записью ---
+        # 2.18.2: вольты берём из vpp_need(), как это делает пакет. До этого
+        # здесь было жёстко «5 В» (аргумент функции включения Vpp), и даже
+        # 12-вольтовой микросхеме (Intel
+        # 28F008SA/28F016SA, AMD Am28F*, то есть именно 12-вольтовым картам)
+        # подавалось 5 В: стирание и запись не проходили, а «не тот Vpp»
+        # выглядел как сбойная карта или сбитый CIS.
+        volts, why_v = vpp_need(info)
         vpp = check_vpp_state(dev, mem, exca)
-        if not vpp["ok"]:
-            ok_vpp, msg_vpp = set_vpp_for_write(dev, voltage=5,
+        if vpp["ok"]:
+            print(f"  VPP: включён ({vpp['vpp']}, через {vpp['source']})")
+            if volts in (5, 12) and vpp.get("vpp") and volts != vpp.get("vpp"):
+                print(f"  ВНИМАНИЕ: по документации нужно {volts} В, а сейчас "
+                      f"{vpp.get('vpp')} В ({why_v}).")
+        elif volts in (5, 12):
+            ok_vpp, msg_vpp = set_vpp_for_write(dev, voltage=volts,
                                                 exca_mem=mem,
                                                 exca_addr=exca)
-            print(f"  VPP: {msg_vpp}")
+            print(f"  VPP: {msg_vpp} ({why_v})")
             if not ok_vpp:
-                print("  ВНИМАНИЕ: VPP не включён. Запись может не пройти — "
-                      "микросхеме нужно 5 В или 12 В на VPP.")
+                print(f"  ВНИМАНИЕ: VPP не включён. Запись может не пройти — "
+                      f"микросхеме нужно {volts} В на VPP ({why_v}).")
         else:
-            print(f"  VPP: включён ({vpp['vpp']}, через {vpp['source']})")
+            # 3 - микросхеме Vpp не нужен (3-вольтовая), 0 - не определить.
+            print(f"  VPP: не включаю - {why_v}. Если запись не пойдёт, "
+                  "укажите модель ключом --chip.")
 
         res = flash_write_image(flash, data, progress=prog,
                                verify=not args.no_verify,

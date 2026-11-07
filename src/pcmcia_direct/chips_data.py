@@ -59,7 +59,29 @@ STMICRO_PARTS = {
 }
 
 
-VENDOR_PARTS = {0x01: AMD_PARTS, 0x04: FUJITSU_PARTS, 0x20: STMICRO_PARTS}
+# Intel: вендор 89h. До 2.18.2 таблицы не было вовсе, а в chips.py лежали
+# ТРИ РАЗНЫХ встроенных словаря кодов Intel, и они противоречили друг другу:
+#   chip_name_from_info: A0=28F016SV, A2=28F008SA, A6=28F008S5, A7=28F004S5,
+#                        B4=28F010;
+#   identify_chip:       A1=28F016SA, A2=28F008SA, A3=28F016S5;
+#   _autodetect_intel:   A1=28F016SA, A2=28F008SA, A3=28F016S5, A4=28F320.
+# Кодов A1h/A3h/A4h нет ни в flashrom (flashchips.h), ни в ядре
+# (drivers/mtd/chips/jedec_probe.c) - имена для них были выдуманы, а
+# задокументированные A0h/A6h/A7h в двух таблицах отсутствовали. Теперь
+# код Intel один и сверен с реестром (jedec_registry.json).
+# B4h - 28F010: даташит Intel 290207-010, Intelligent Identifier
+# (mfr 89h / device B4h), читается командой 90h.
+INTEL_PARTS = {
+    0xA0: ("28F016SV", 16),   # 2 МиБ = 16 Мбит, CUI (flashrom: «28F016SA/SV»)
+    0xA2: ("28F008SA", 8),    # 1 МиБ = 8 Мбит, CUI, 16 x 64 КиБ
+    0xA6: ("28F008S5", 8),    # 1 МиБ = 8 Мбит, Smart 5
+    0xA7: ("28F004S5", 4),    # 512 КиБ = 4 Мбит, Smart 5
+    0xB4: ("28F010", 1),      # 128 КиБ = 1 Мбит, 12 В, только 90h
+}
+
+
+VENDOR_PARTS = {0x01: AMD_PARTS, 0x04: FUJITSU_PARTS, 0x20: STMICRO_PARTS,
+                0x89: INTEL_PARTS}
 
 
 #
@@ -83,7 +105,7 @@ VPP126 = {"Am28F256", "Am28F512", "Am28F010", "Am28F020", "28F256", "28F512",
 
 
 VPP5 = {"Am29F016", "Am29F800", "Am29F400", "Am29F040", "Am29F200", "Am29F010",
-        "Am29F032/Am29F033", "Am29F080", "Am29LV016", "MBM29F016",
+        "Am29F080", "Am29LV016", "MBM29F016",
         # имена с ревизией (boot-чипы и B-ревизии) - тоже 5.0 V only
         "Am29F200AB", "Am29F200AT", "Am29F400AB", "Am29F400AT",
         "Am29F800BB", "Am29F800BT", "Am29F080B", "Am29F017D", "Am29F032B",
@@ -104,7 +126,10 @@ VPP5 = {"Am29F016", "Am29F800", "Am29F400", "Am29F040", "Am29F200", "Am29F010",
         "M28F004", "M5M29F400", "MBM29F002", "MBM29F004",
         "MBM29F033", "SST39SF040",
         "SST39VF010", "SST39VF020", "SST39VF040", "SST39VF080",
-        "TC58FVT160", "TC58FVT320",
+        # 2.18.2: было TC58FVT320 - такого имени у Toshiba нет (см. WRONG_NAMES:
+        # 32-Мбит часть называется TC58FVT321), а в таблице геометрии строка
+        # есть только у правильного имени.
+        "TC58FVT160", "TC58FVT321",
         # AMD/Fujitsu StrataFlash — 5 В или 3 В, VPP не нужен
         "Am29PL320", "Am29PL640", "Am29PL1280",
         "Am29DL322", "Am29DL323", "Am29DL642", "Am29DL643",
@@ -112,7 +137,13 @@ VPP5 = {"Am29F016", "Am29F800", "Am29F400", "Am29F040", "Am29F200", "Am29F010",
         "Am29DL324DB", "Am29DL324DT", "MBM29DL322BE", "MBM29DL322TE",
         "Am29LV033C",
         "Am29GL064", "Am29GL128", "Am29GL256", "Am29GL512", "Am29GL1024",
-        "MBM29DL322", "MBM29DL642", "MBM29GL064", "MBM29GL128"}
+        "MBM29DL322", "MBM29DL642", "MBM29GL064", "MBM29GL128",
+        # 2.18.2: эти строки были в GEOMETRY, но ни в одном списке Vpp - то
+        # есть vpp_need() по паспорту отвечал «не определить» вместо
+        # «12 В не нужно». Сверка списков двух источников (набор и база
+        # пакета) показала ровно эти девять имён.
+        "28F320", "Am29LV001", "Am29LV160", "Am29LV400", "Am29LV800",
+        "TC58FVT321", "K9F1208U0A", "K9F1G08U0A", "K9F2G08U0A"}
 
 
 # ============================================================================
@@ -271,6 +302,36 @@ GEOMETRY = {
                       size=2 << 20, volts=5, bypass=False,
                       src="Fujitsu MBM29F016A (16M (2M x 8) BIT): 32 сектора по "
                           "64 КиБ, 5.0 V-Only; unlock bypass 20h не подтверждён"),
+    # AMD Am28F: 12 вольт на Vpp и ТОЛЬКО стирание всего чипа (Bulk Erase).
+    # Публикации AMD: Am28F256 - 11560 Rev G ("256 Kilobit (32 K x 8-Bit)
+    # CMOS 12.0 Volt, Bulk Erase"), Am28F512 - 11561 Rev G ("512 Kilobit
+    # (64 K x 8-Bit)"), Am28F010 - 11559 Rev H ("1 Megabit (128 K x 8-Bit)"),
+    # Am28F020 - "2 Megabit (256 K x 8-Bit) CMOS 12.0 Volt, Bulk Erase".
+    # Секторного стирания у семейства нет: пишем ro=True и объясняем причину,
+    # иначе набор пытался бы стирать «сектор» командой 30h, которой нет.
+    "Am28F256": dict(sector=32 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=32 << 10, volts=12, ro=True,
+                     why="Am28F256: только Bulk Erase (всё сразу), секторного "
+                         "стирания нет; программирование при 12 В на Vpp "
+                         "(AMD 11560 Rev G)",
+                     src="AMD Am28F256: 256 Кбит = 32 КиБ, 32K x 8, "
+                         "12.0 V ± 5%"),
+    "Am28F512": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=64 << 10, volts=12, ro=True,
+                     why="Am28F512: только Bulk Erase, секторного стирания нет; "
+                         "12 В на Vpp (AMD 11561 Rev G)",
+                     src="AMD Am28F512: 512 Кбит = 64 КиБ, 64K x 8, 12.0 V"),
+    "Am28F010": dict(sector=128 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=128 << 10, volts=12, ro=True,
+                     why="Am28F010: только Bulk Erase (Flasherase), секторного "
+                         "стирания нет; 12 В на Vpp (AMD 11559 Rev H)",
+                     src="AMD Am28F010: 1 Мбит = 128 КиБ, 128K x 8, 12.0 V ± 5%"),
+    "Am28F020": dict(sector=256 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=256 << 10, volts=12, ro=True,
+                     why="Am28F020: только Bulk Erase, секторного стирания нет; "
+                         "12 В на Vpp (AMD: 2 Megabit (256 K x 8-Bit) CMOS "
+                         "12.0 Volt, Bulk Erase)",
+                     src="AMD Am28F020: 2 Мбит = 256 КиБ, 256K x 8, 12.0 V"),
     # 28F008SA: команда - СЛОВО по 0x5555, сектор 64 КиБ, вся карта стирается
     # только по секторам (chip erase у неё есть, но 10h у Intel - другое)
     # ВНИМАНИЕ про Intel: у 28F команда подаётся по адресу 0x5555 в СЛОВАХ.
@@ -426,7 +487,10 @@ GEOMETRY = {
                          "данные. Укажите --chip MBM29F004TC или MBM29F004BC",
                      src="Fujitsu MBM29F004TC/MBM29F004BC (даташиты Fujitsu, "
                          "top/bottom boot)"),
-    "M28F102": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+    # 2.18.2: сектор = вся ёмкость. Поблочного стирания у M28F102 нет
+    # («Electrical CHIP ERASE in 1s» в даташите ST), поэтому «сектор 64 КиБ»
+    # в строке был вымыслом: чип стирается только целиком, как 28F010.
+    "M28F102": dict(sector=128 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                     size=128 << 10, volts=12, ambiguous=True,
                     # 2.17.17: как у 28F010/28F020 - страховка в самом
                     # NorFlash, а не только в check_sector_map: поблочного

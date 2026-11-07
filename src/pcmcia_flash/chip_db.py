@@ -40,14 +40,30 @@ def _load_json(name: str) -> dict[str, Any]:
         return json.load(f)
 
 
-def _build_part_tables(chips: dict[str, Any]) -> tuple[dict, dict, dict]:
-    """Построить AMD_PARTS, FUJITSU_PARTS, INTEL_PARTS из chips.json.
+def load_registry() -> dict[str, Any]:
+    """Прочитать эталонный реестр JEDEC ID (data/jedec_registry.json).
+
+    2.18.2: единственный источник истины для кодов производителей. Раньше те же
+    коды лежали ещё и литералами в jedec_registry.py, и два списка разъезжались.
+    """
+    return _load_json("jedec_registry.json")
+
+
+def _build_part_tables(chips: dict[str, Any]) -> tuple[dict, dict, dict, dict]:
+    """Построить AMD_PARTS, FUJITSU_PARTS, INTEL_PARTS, STMICRO_PARTS из chips.json.
 
     Формат: {JEDEC_ID: (имя, ёмкость_Мбит, ревизия/примечание)}
+
+    2.18.2: добавлена таблица STMicroelectronics. До неё коды ST (20h/D5h,
+    20h/D6h) лежали в монолите (VENDOR_PARTS[0x20]) и в chips.json, но ни
+    реестр, ни валидация их не видели - то есть эти два источника никто
+    не сверял. Поле "manuf" в chips.json тоже было вразнобой ("ST" и
+    "STMicroelectronics"); теперь одно имя.
     """
     amd: dict[int, tuple[str, int, str]] = {}
     fujitsu: dict[int, tuple[str, int, str]] = {}
     intel: dict[int, tuple[str, int, str]] = {}
+    st: dict[int, tuple[str, int, str]] = {}
 
     for name, chip in chips.items():
         jedec = _hex(chip.get("jedec_id"))
@@ -65,8 +81,10 @@ def _build_part_tables(chips: dict[str, Any]) -> tuple[dict, dict, dict]:
             fujitsu[jedec] = entry
         elif manuf == "Intel":
             intel[jedec] = entry
+        elif manuf in ("STMicroelectronics", "ST"):
+            st[jedec] = entry
 
-    return amd, fujitsu, intel
+    return amd, fujitsu, intel, st
 
 
 def _build_geometry(chips: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -139,7 +157,8 @@ def validate(chip_geometry: dict[str, Any],
              amd_parts: dict[int, Any],
              fujitsu_parts: dict[int, Any],
              intel_parts: dict[int, Any],
-             registry: dict[str, Any]) -> None:
+             registry: dict[str, Any],
+             st_parts: dict[int, Any] | None = None) -> None:
     """Fail-fast валидация: все JEDEC ID в чипах должны совпадать с эталоном.
 
     Выбрасывает DirectError при любом несовпадении.
@@ -171,6 +190,8 @@ def validate(chip_geometry: dict[str, Any],
     check_vendor("AMD", amd_parts, "AMD")
     check_vendor("Fujitsu", fujitsu_parts, "Fujitsu")
     check_vendor("Intel", intel_parts, "Intel")
+    if st_parts is not None:
+        check_vendor("STMicroelectronics", st_parts, "ST")
 
     if errors:
         msg = "JEDEC ID не совпадают с эталонным реестром (jedec_registry.json):\n" + "\n".join(
@@ -181,9 +202,10 @@ def validate(chip_geometry: dict[str, Any],
 
 # --- загрузка данных при импорте модуля --------------------------------
 _raw_chips = _load_json("chips.json")
-_registry = _load_json("jedec_registry.json")
+_registry = load_registry()
 
-AMD_PARTS, FUJITSU_PARTS, INTEL_PARTS = _build_part_tables(_raw_chips["chips"])
+AMD_PARTS, FUJITSU_PARTS, INTEL_PARTS, STMICRO_PARTS = _build_part_tables(
+    _raw_chips["chips"])
 CHIP_GEOMETRY = _build_geometry(_raw_chips["chips"])
 VPP5, VPP126 = _build_vpp_lists(
     _raw_chips["chips"],
@@ -192,9 +214,11 @@ VPP5, VPP126 = _build_vpp_lists(
 )
 
 # Fail-fast при импорта модуля
-validate(CHIP_GEOMETRY, AMD_PARTS, FUJITSU_PARTS, INTEL_PARTS, _registry)
+validate(CHIP_GEOMETRY, AMD_PARTS, FUJITSU_PARTS, INTEL_PARTS, _registry,
+         STMICRO_PARTS)
 
 __all__ = [
     "CHIP_GEOMETRY", "AMD_PARTS", "FUJITSU_PARTS", "INTEL_PARTS",
+    "STMICRO_PARTS", "load_registry",
     "VPP5", "VPP126", "PAGE_NONE",
 ]
