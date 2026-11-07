@@ -881,7 +881,8 @@
       "protocol": "intel",
       "volts": 5,
       "manuf": "Intel",
-      "notes": "16 Mbit, CUI, 5 В. ID A0h — flashrom flashchips.h (INTEL_28F016SV «28F016SA/SV»)"
+      "notes": "16 Mbit, CUI, 5 В. ID A0h — flashrom flashchips.h (INTEL_28F016SV «28F016SA/SV»)",
+      "unverified": true
     },
     "28F016S5": {
       "jedec_id": null,

@@ -693,7 +693,7 @@ check("MX29F1610: прежние 64 КиБ - отказ, сосед назван
 # Am29PL320/640/1280 добавлены в 2.17.6: таких имён нет ни в flashchips.h, ни
 # в jedec_probe.c, то есть строка держалась на догадке.
 UNVERIFIED = {"HN28F010", "HN28F020", "HN28F100",
-              "LH28F010", "LH28F020", "M28F016",
+              "LH28F010", "LH28F020", "M28F016", "28F016SV",
               "M5M29F010", "M5M29F020", "MX29F3210",
               "Am29PL320", "Am29PL640", "Am29PL1280",
               "Am29F032", "MBM29F033"}
@@ -2070,6 +2070,64 @@ except _cdb.DirectError as exc:
     no_why = str(exc)
 check("chips.json: ro без why не загружается (отказ обязан быть объяснён)",
       "why" in no_why, no_why[:70])
+
+# --- 27. Обратная синхронизация: имена только из пакета ----------------------
+# 2.17.22. До этой правки четыре имени знал только пакет: 28F016SV,
+# Am29F016D, MX29F016, MX29F040. То есть карту с такой микросхемой можно было
+# открыть из пакета и нельзя из монолита - та же рассинхронизация, что в
+# 2.17.21 в другую сторону. Три строки добавлены по цитатам:
+#   Am29F016D - AMD 21444E: «32 uniform sectors of 64 Kbytes each», 5.0 V
+#               only, в ревизии D есть Unlock Bypass (поэтому bypass=True);
+#   MX29F016  - Macronix P/N PM0590 ред. 1.4: «Sector Erase: 32 equal sector
+#               with of 64KByte each», питание 5 В;
+#   MX29F040  - Macronix MX29F040: «8 equal sectors of 64K-Byte each», 5.0 V.
+# 28F016SV добавлен с пометкой «не сверено»: ёмкость и CUI есть в даташите
+# E28F016SV-070, а цитаты про «32 блока по 64 КиБ» найти не удалось.
+section("обратная синхронизация: в пакете не осталось имён, которых нет в монолите")
+
+only_pkg = sorted(set(C.CHIP_GEOMETRY) - set(D.GEOMETRY))
+check("ни одно имя не встречается только в пакете", not only_pkg,
+      str(only_pkg[:5]))
+
+cited = {"Am29F016D": "21444E", "MX29F016": "PM0590", "MX29F040": "MX29F040"}
+bad_src = [n for n, doc in cited.items()
+           if n not in D.GEOMETRY or doc not in str(D.GEOMETRY[n].get("src") or "")]
+check("Am29F016D, MX29F016, MX29F040 в монолите называют документ",
+      not bad_src, str(bad_src))
+
+bad_new = []
+new_geo = {"Am29F016D": (2 << 20, 64 << 10, 5, True),
+           "MX29F016": (2 << 20, 64 << 10, 5, False),
+           "MX29F040": (512 << 10, 64 << 10, 5, False)}
+for name, (size, sector, volts, bypass) in new_geo.items():
+    g = D.GEOMETRY.get(name) or {}
+    p = C.CHIP_GEOMETRY.get(name) or {}
+    got = (g.get("size"), g.get("sector"), g.get("volts"), bool(g.get("bypass")))
+    got_p = (p.get("size"), p.get("sector"), p.get("volts"), bool(p.get("bypass")))
+    if got != (size, sector, volts, bypass) or got_p != got:
+        bad_new.append("%s: %s / %s" % (name, got, got_p))
+check("три новые строки: ёмкость, сектор 64 КиБ, 5 В, bypass - как в даташитах",
+      not bad_new, str(bad_new))
+
+sv_mono = D.GEOMETRY.get("28F016SV") or {}
+sv_pkg = C.CHIP_GEOMETRY.get("28F016SV") or {}
+check("28F016SV: в ОБЕИХ таблицах пометка «не сверено», числа совпадают",
+      bool(sv_mono.get("unverified")) and bool(sv_pkg.get("unverified"))
+      and sv_mono.get("size") == sv_pkg.get("size")
+      and sv_mono.get("sector") == sv_pkg.get("sector"),
+      (sv_mono.get("unverified"), sv_pkg.get("unverified")))
+
+# Списки Vpp нужны, чтобы по паспорту карты решить, подавать ли 12 В.
+# 3-вольтовым строкам Vpp не нужен вовсе, поэтому проверяем ровно те, кому он
+# важен: 12 В обязаны быть в VPP126, 5 В - в VPP5. До 2.17.22 пять строк
+# (28F008SA, 28F016SA и три Intel S5) не были ни в одном списке.
+missing_12 = sorted(n for n, g in D.GEOMETRY.items()
+                    if g.get("volts") == 12 and n not in D.VPP126)
+missing_5 = sorted(n for n, g in D.GEOMETRY.items()
+                   if g.get("volts") == 5 and n not in D.VPP5)
+check("каждая 12-вольтовая строка есть в VPP126", not missing_12,
+      str(missing_12[:4]))
+check("каждая 5-вольтовая строка есть в VPP5", not missing_5, str(missing_5[:4]))
 
 # --- итог ---------------------------------------------------------------------
 print("\n" + "=" * 70)

@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.21"          # версия набора: печатается в отчёте и в --version
+KIT_VERSION = "2.17.22"          # версия набора: печатается в отчёте и в --version
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -872,7 +872,10 @@ def vendor_part(vid, did):
 VPP126 = {"Am28F256", "Am28F512", "Am28F010", "Am28F020", "28F256", "28F512",
           "28F010", "28F020",
           "D28F010", "D28F020", "LH28F010", "LH28F020",
-          "M28F008", "M28F016", "M28F102"}
+          "M28F008", "M28F016", "M28F102",
+          # 2.17.22: строки с volts=12 в GEOMETRY, которых здесь не было -
+          # detect_vpp по паспорту карты отвечал «не определить» вместо 12 В.
+          "28F008SA", "28F016SA"}
 VPP5 = {"Am29F016", "Am29F800", "Am29F400", "Am29F040", "Am29F200", "Am29F010",
         "Am29F032/Am29F033", "Am29F080", "Am29LV016", "MBM29F016",
         # имена с ревизией (boot-чипы и B-ревизии) - тоже 5.0 V only
@@ -886,7 +889,14 @@ VPP5 = {"Am29F016", "Am29F800", "Am29F400", "Am29F040", "Am29F200", "Am29F010",
         "M29F002BT", "M29F002BB", "M29F400BT", "M29F400BB",
         "HN28F010", "HN28F020", "HN28F100",
         "M5M29F010", "M5M29F020",
-        "MX29F1610", "MX29F3210",
+        "MX29F016", "MX29F040", "MX29F1610", "MX29F3210",
+        "Am29F016D", "28F016SV",
+        # 2.17.22: строки геометрии с volts=5, которых здесь не было, -
+        # по паспорту карты Vpp не определялся, хотя 12 В им не нужны.
+        "28F004S5", "28F008S5", "28F016S5", "AT29C010", "AT29C020",
+        "AT29C040", "AT29C512", "Am29F032", "Am29F033", "M28F002",
+        "M28F004", "M28F016S5", "M5M29F400", "MBM29F002", "MBM29F004",
+        "MBM29F033", "SST39SF040",
         "SST39VF010", "SST39VF020", "SST39VF040", "SST39VF080",
         "TC58FVT160", "TC58FVT320",
         # AMD/Fujitsu StrataFlash — 5 В или 3 В, VPP не нужен
@@ -2755,6 +2765,13 @@ GEOMETRY = {
                          "Bypass (20h) появился только в ревизии D (21444E5: "
                          "«The device now has the Unlock Bypass Program "
                          "feature»), поэтому по умолчанию не шлём"),
+    "Am29F016D": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                      size=2 << 20, volts=5, bypass=True,
+                      src="AMD Am29F016D (21444E, ред. E, июль 2006): 16 Мбит "
+                          "x8, «32 uniform sectors of 64 Kbytes each», "
+                          "5.0 V only; в ревизии D появился «Unlock Bypass "
+                          "Program Command», поэтому bypass=True. JEDEC ID "
+                          "тот же 01AD, что у Am29F016, - отличать по CFI"),
     "Am29F032": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                      size=4 << 20, volts=5, bypass=True, unverified=True,
                      src="AMD Am29F032: в селекторе AMD 32-Мбит 5-вольтовая часть "
@@ -2995,6 +3012,15 @@ GEOMETRY = {
     # «Sector erase architecture - 16 equal sectors of 128k bytes each»,
     # страничная запись 128 байт/64 слова. Прежние «64 КиБ сектор» были
     # опасны: стирание «64 КиБ» стёрло бы блок 128 КиБ вместе с соседом.
+    "MX29F016": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=2 << 20, volts=5, bypass=False,
+                     src="Macronix MX29F016 (P/N PM0590, ред. 1.4, "
+                         "21.11.2002): 16 Мбит x8, «Sector Erase: 32 equal "
+                         "sector with of 64KByte each», питание 5 В"),
+    "MX29F040": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                     size=512 << 10, volts=5, bypass=False,
+                     src="Macronix MX29F040: 4 Мбит (512K x 8), «Sector Erase "
+                         "8 equal sectors of 64K-Byte each», 5.0 V only"),
     "MX29F1610": dict(sector=128 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
                       size=2 << 20, volts=5, bypass=True,
                       src="Macronix MX29F1610: 16 секторов по 128 КиБ, 5 В "
@@ -3051,6 +3077,18 @@ GEOMETRY = {
     "28F016SA": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=True,
                      size=2 << 20, volts=12, protocol="intel",
                      src="Intel 28F016SA: CUI, 32 блока по 64 КиБ, Vpp 12 В"),
+    # 28F016SV (2.17.22): имя и параметры взяты из базы пакета, где строка
+    # стоит без пометки, но цитаты по карте блоков найти не удалось. В
+    # даташите Intel «16-MBIT (1 MBIT x 16, 2 MBIT x 8) FlashFile MEMORY»
+    # (E28F016SV-070, 63 стр.) есть ёмкость, CUI и «user-selectable VPP
+    # voltage»; про «32 блока по 64 КиБ» цитаты нет, поэтому пометка остаётся
+    # в ОБЕИХ таблицах, а не выдаётся за проверку.
+    "28F016SV": dict(sector=64 << 10, page=1, cmd=(0, 0), wide=True,
+                     size=2 << 20, volts=5, protocol="intel", unverified=True,
+                     src="Intel 28F016SV: 16 Мбит (1 Мбит x16 / 2 Мбит x8), "
+                         "CUI, Vpp на выбор (5 или 12 В) - по даташиту "
+                         "E28F016SV-070; карта блоков (32 по 64 КиБ) взята из "
+                         "базы пакета и даташитом не сверена"),
     # Даташит Intel 28F016S5 («Byte-Wide Smart 5 FlashFile Memory»): «64-Kbyte
     # Symmetrical Erase Block Architecture ... 16 Mbit: Thirty-Two Blocks».
     # Прежние 128 КиБ давали ложный отказ blank-check и запись через границу
