@@ -42,7 +42,7 @@ import sys
 import time
 
 CIS_TAG = b"CIS"                 # маркер цепочки CIS: CISTPL_LINKTARGET "CIS"
-KIT_VERSION = "2.17.26"          # версия набора: печатается в отчёте и в --version
+KIT_VERSION = "2.17.27"          # версия набора: печатается в отчёте и в --version
 PAGE = 4096                     # страница памяти: mmap требует кратного смещения
 WIN_CHUNK = 1024 * 1024          # сколько отображаем за один mmap
 #
@@ -3086,8 +3086,17 @@ GEOMETRY = {
                            "(ядро jedec_probe.c + описание Toshiba TC58FVT/B321)"),
     # --- Samsung ---
     "K9F1G08U0A": dict(sector=128 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=128 << 20, volts=3.3, bypass=False,
-                       src="Samsung K9F1G08U0A: NAND, не поддерживается (доступ только по паспорту)"),
+                       size=128 << 20, volts=3.3, bypass=False, ro=True,
+                       why="NAND, а не NOR: чтение и запись идут страницами (2K + "
+                           "64 байт), стирание - блоком командой 60h с "
+                           "подтверждением D0h, адрес, команды и данные передаются "
+                           "по одним линиям I/O0-I/O7. Линейно, как NOR-карта, эта "
+                           "микросхема не читается, и стирать её командами "
+                           "20h/30h/D0h нельзя - набор её не трогает",
+                       src="Samsung K9F1G08U0A: «128M x 8 Bit NAND Flash Memory», "
+                         "массив (128M + 4,096K)bit x 8, страница (2K + 64) байт, "
+                         "блок (128K + 4K) байт, 1024 блока, «the bit by bit erase "
+                         "operation is prohibited»"),
     # --- Macronix ---
     # Даташит Macronix MX29F1610 (16M-BIT [2Mx8/1Mx16], 5 В +-10%):
     # «Sector erase architecture - 16 equal sectors of 128k bytes each»,
@@ -3459,12 +3468,30 @@ GEOMETRY = {
                         "в справочниках M28F008 числится за Intel "
                         "(«8 MBIT (1 MBIT x 8) FLASH MEMORY»)"),
     # --- Samsung (дополнительно к K9*) ---
-    "K9F1208U0A": dict(sector=64 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=128 << 20, volts=3.3, bypass=False,
-                       src="Samsung K9F1208U0A: NAND, не поддерживается (доступ только по паспорту)"),
+    "K9F1208U0A": dict(sector=16 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
+                       size=64 << 20, volts=3.3, bypass=False, ro=True,
+                       why="NAND, а не NOR: чтение и запись идут страницами (512 + "
+                           "16 байт), стирание - блоком командой 60h с "
+                           "подтверждением D0h, адрес, команды и данные передаются "
+                           "по одним линиям I/O0-I/O7. Линейно, как NOR-карта, эта "
+                           "микросхема не читается, и стирать её командами "
+                           "20h/30h/D0h нельзя - набор её не трогает",
+                       src="Samsung K9F1208U0A (Rev 1.6): «64M x 8 Bit / 32M x 16 "
+                         "Bit NAND Flash Memory», массив (64M + 2048K)bit x 8, "
+                         "страница (512 + 16) байт, блок (16K + 512) байт, 4096 "
+                         "блоков, Erase Setup 60h + Erase Confirm D0h"),
     "K9F2G08U0A": dict(sector=128 << 10, page=1, cmd=(0x555, 0x2AA), wide=False,
-                       size=256 << 20, volts=3.3, bypass=False,
-                       src="Samsung K9F2G08U0A: NAND, не поддерживается (доступ только по паспорту)"),
+                       size=256 << 20, volts=3.3, bypass=False, ro=True,
+                       why="NAND, а не NOR: чтение и запись идут страницами (2K + "
+                           "64 байт), стирание - блоком командой 60h с "
+                           "подтверждением D0h, адрес, команды и данные передаются "
+                           "по одним линиям I/O0-I/O7. Линейно, как NOR-карта, эта "
+                           "микросхема не читается, и стирать её командами "
+                           "20h/30h/D0h нельзя - набор её не трогает",
+                       src="Samsung K9F2G08U0A: «256M x 8 Bit NAND Flash Memory», "
+                         "массив (256M + 8,192K)bit x 8, страница (2K + 64) байт, "
+                         "блок (128K + 4K) байт, 2048 блоков, Erase Setup 60h + "
+                         "Erase Confirm D0h"),
 }
 
 # Intel 28F с командой словом: сброс, автоопределение, CFI у них другие.
@@ -3515,9 +3542,13 @@ def check_sector_map(geo, strict=False):
                 str(total) + " байт, а ёмкость " + str(size) + " - данные "
                 "противоречат друг другу, работать нельзя.")
         return geo
-    if geo.get("ambiguous") and geo.get("why"):
+    if geo.get("why"):
         # Отказ не из-за ревизии, а из-за того, что микросхема вообще не умеет
-        # то, на чём построен наш цикл (например, стирание только целиком).
+        # то, на чём построен наш цикл (стирание только целиком, страничная
+        # запись без 30h, NAND вместо NOR). 2.17.27: why - самостоятельная
+        # причина, без обязательного ambiguous; раньше строка Samsung K9F*
+        # (ro=True, why=«NAND», без ambiguous) молча проходила проверку и
+        # получала однородную карту секторов.
         hint = geo.get("src") or geo.get("notes") or ""
         raise DirectError("микросхема " + str(name) + ": " + str(geo["why"])
                           + ((" Подробнее: " + hint.rstrip(".") + ".") if hint else ""))
