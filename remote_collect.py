@@ -131,15 +131,17 @@ def main(argv: list[str] | None = None) -> int:
     if not kit:
         for c in (self_dir, self_dir / "pcmcia-flash-kit",
                   Path.cwd(), Path.cwd() / "pcmcia-flash-kit"):
-            if (c / "windows" / "legacy" / "pcmcia_direct.py").is_file():
+            if (c / "pcmcia_direct.py").is_file():
                 kit = str(c)
                 break
     if not kit:
-        die("не нашёл набор рядом (нужен windows/legacy/pcmcia_direct.py).\n"
+        die("не нашёл набор рядом (нужен pcmcia_direct.py в корне набора).\n"
             "  Укажите папку: --kit /путь/к/pcmcia-flash-kit")
     kit_p = Path(kit)
-    if not (kit_p / "windows" / "legacy" / "pcmcia_direct.py").is_file():
-        die(f"в {kit} нет windows/legacy/pcmcia_direct.py")
+    if not (kit_p / "pcmcia_direct.py").is_file():
+        die(f"в {kit} нет pcmcia_direct.py")
+    if not (kit_p / "src" / "pcmcia_direct" / "cli.py").is_file():
+        die(f"в {kit} нет пакета src/pcmcia_direct (код работы с картой)")
     if not (kit_p / "collect_all.py").is_file():
         die(f"в {kit} нет collect_all.py — скрипт, который\n"
             "  выполняется на ноутбуке. Он должен лежать рядом с pcmcia_direct.py.")
@@ -170,11 +172,17 @@ def main(argv: list[str] | None = None) -> int:
         if not src.is_file():
             die(f"не удалось скопировать {f}")
         shutil.copy2(str(src), str(stage / f))
-    # pcmcia_direct.py теперь в windows/legacy/ — копируем как pcmcia_direct.py
-    direct_src = kit_p / "windows" / "legacy" / "pcmcia_direct.py"
+    # Точка входа — pcmcia_direct.py в корне набора; сам код лежит в пакете
+    # src/pcmcia_direct, поэтому на ноутбук уезжает и он (с 2.18.0).
+    direct_src = kit_p / "pcmcia_direct.py"
     if not direct_src.is_file():
-        die("не удалось скопировать windows/legacy/pcmcia_direct.py")
+        die("не удалось скопировать pcmcia_direct.py")
     shutil.copy2(str(direct_src), str(stage / "pcmcia_direct.py"))
+    pkg_src = kit_p / "src" / "pcmcia_direct"
+    if not pkg_src.is_dir():
+        die("не удалось скопировать src/pcmcia_direct")
+    shutil.copytree(str(pkg_src), str(stage / "src" / "pcmcia_direct"),
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     for f in optional_files:
         src = kit_p / f
         if src.is_file():

@@ -223,7 +223,7 @@ def apply() -> None:
     if verdict:
         say("  перезагрузить ноутбук С КАРТОЙ В СЛОТЕ и снять отчёт:")
         say("    sudo reboot")
-        say("    (с Windows это делает:  .\\RUN.ps1 -HostName <адрес> -PlanB -Reboot)")
+        say("    (с Windows это делает:  python run_remote.py --host <адрес> --planb --reboot)")
     else:
         say("  НЕ перезагружайте: параметр не попал в загрузку. Пришлите вывод выше.")
     say("")

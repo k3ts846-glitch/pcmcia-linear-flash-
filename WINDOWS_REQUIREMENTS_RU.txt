@@ -30,7 +30,7 @@ PowerShell 5.1 (встроенный) достаточно, PowerShell 7 не о
 2. ФАЙЛЫ В ОДНОЙ ПАПКЕ (например D:\pcmcia-flash-kit)
 ------------------------------------------------------
    ОБЯЗАТЕЛЬНО:
-     remote_collect.ps1     ← сам скрипт, вы его запускаете
+     remote_collect.py     ← сам скрипт, вы его запускаете
      collect_all.sh         ← что выполнится НА НОУТБУКЕ (отчёт)
      pcmcia_direct.py       ← чтение окон памяти и паспорта карты (--probe/--cis)
 
@@ -51,7 +51,7 @@ PowerShell 5.1 (встроенный) достаточно, PowerShell 7 не о
 
 Проверка комплекта без подключения:
 
-     .\remote_collect.ps1 -DryRun
+     python remote_collect.py --dry-run
 
 покажет найденные ssh/tar и список файлов, которые уйдут на ноутбук.
 
@@ -72,14 +72,14 @@ PowerShell 5.1 (встроенный) достаточно, PowerShell 7 не о
 4. ЗАПУСК
 ---------
      cd D:\pcmcia-flash-kit
-     .\remote_collect.ps1
+     python remote_collect.py
 
 Если PowerShell не даёт запускать скрипты («выполнение сценариев отключено»):
 
-     powershell -ExecutionPolicy Bypass -File .\remote_collect.ps1
+     powershell -ExecutionPolicy Bypass -File python remote_collect.py
 
 Если Windows помечает файл как скачанный из интернета:
 
-     Unblock-File .\remote_collect.ps1
+     Unblock-File python remote_collect.py
 
 Результат: otchet-<адрес>-<дата>.txt в той же папке. Его и присылать.

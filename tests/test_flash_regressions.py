@@ -34,6 +34,17 @@ sys.path.insert(0, os.path.join(KIT, "tests"))
 import nor_model as NM                                              # noqa: E402
 from pcmcia_flash import image as _image                            # noqa: E402
 
+# С 2.18.0 монолита windows/legacy/pcmcia_direct.py нет: код разложен по
+# модулям пакета src/pcmcia_direct. Проверки, которым нужен ИСХОДНЫЙ ТЕКСТ
+# (а не поведение), читают все модули подряд через direct_source().
+DIRECT_PKG = pathlib.Path(KIT, "src", "pcmcia_direct")
+DIRECT_FILES = sorted(DIRECT_PKG.glob("*.py"))
+
+
+def direct_source():
+    """Весь исходник пакета pcmcia_direct одним текстом."""
+    return "\n".join(p.read_text(encoding="utf-8") for p in DIRECT_FILES)
+
 PASS, FAIL = [], []
 
 
@@ -127,6 +138,17 @@ card, bus, flash = NM.make(kit=KIT, chips=2, chip_name="Am29F016", blank=False,
                            no_cfi=True)
 check("микросхема без CFI -> пустой ответ, а не мусор",
       D._autodetect_cfi(flash) == {})
+
+# 2.18.0: _autodetect_intel создаёт второй объект шины (NorFlash словом).
+# NorFlash живёт в nor.py, а nor.py берёт имена из chips.py — импорт внутри
+# функции обязателен, иначе кольцо. Пропущенный импорт виден только вызовом:
+# ruff (F821) нашёл его в разбитом монолите, а прежние тесты не звали функцию.
+card, bus, flash = NM.make(kit=KIT, chips=1, chip_name="28F008SA", blank=False)
+_silent = D._autodetect_intel(flash)
+check("Intel ID: функция зовётся (NorFlash подключается внутри, без кольца)",
+      isinstance(_silent, dict), repr(_silent))
+check("Intel ID: молчащая микросхема -> пустой ответ, а не 0x00 в имени",
+      _silent == {}, repr(_silent))
 
 # --- 4. Автоопределение по JEDEC ID и работа без Unlock Bypass -----------------
 section("JEDEC ID и Unlock Bypass")
@@ -997,9 +1019,9 @@ check("незащищённый блок пишется нормально", ok,
 
 # Две реализации не должны разойтись в диагностике: текст один и тот же.
 _srcs = {}
-for where, rel in (("монолит", ("windows", "legacy", "pcmcia_direct.py")),
-                   ("пакет", ("src", "pcmcia_flash", "nor_flash.py"))):
-    text = pathlib.Path(KIT, *rel).read_text(encoding="utf-8")
+for where, text in (("pcmcia_direct", direct_source()),
+                    ("pcmcia_flash", pathlib.Path(KIT, "src", "pcmcia_flash",
+                                                  "nor_flash.py").read_text(encoding="utf-8"))):
     # в исходнике строка разбита переносом, поэтому ищем короткие куски
     _srcs[where] = "lock-bit" in text and "RP#" in text and "297796" in text
 check("оба файла знают про master lock-bit и RP#", all(_srcs.values()), str(_srcs))
@@ -1055,15 +1077,15 @@ check("напряжение, страница, wide и bypass совпадают
 import ast                                                          # noqa: E402
 
 dup_keys = []
-for node in ast.walk(ast.parse(pathlib.Path(KIT, "windows/legacy",
-                                            "pcmcia_direct.py")
-                              .read_text(encoding="utf-8"))):
-    if isinstance(node, ast.Dict):
-        seen = {}
-        for k in node.keys:
-            if isinstance(k, ast.Constant) and isinstance(k.value, str):
-                seen.setdefault(k.value, []).append(k.lineno)
-        dup_keys += ["%s:%s" % (k, v) for k, v in seen.items() if len(v) > 1]
+for _file in DIRECT_FILES:
+    for node in ast.walk(ast.parse(_file.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Dict):
+            seen = {}
+            for k in node.keys:
+                if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                    seen.setdefault(k.value, []).append(k.lineno)
+            dup_keys += ["%s:%s:%s" % (_file.name, k, v)
+                         for k, v in seen.items() if len(v) > 1]
 check("в GEOMETRY нет повторяющихся ключей (они молча перекрывают друг друга)",
       not dup_keys, str(dup_keys[:3]))
 # Таблица секторов карты для boot-пары: карта чипа масштабируется на число
@@ -1385,14 +1407,16 @@ ok_s, why_s = susp.erase_sector(0)
 check("SR.6: приостановленное стирание не выдаётся за готовое",
       not ok_s and "приостановлено" in why_s and "D0h" in why_s, why_s[:80])
 
-for path in ("windows/legacy/pcmcia_direct.py", "src/pcmcia_flash/nor_flash.py"):
-    src = (pathlib.Path(KIT) / path).read_text(encoding="utf-8")
+for path, src in (("pcmcia_direct", direct_source()),
+                  ("nor_flash.py", pathlib.Path(KIT, "src", "pcmcia_flash",
+                                                "nor_flash.py")
+                   .read_text(encoding="utf-8"))):
     if not ("def _clear_status_and_reset" in src
             and "INTEL_CUI_CLEAR_SR" in src
             and "SR_SUSPEND" in src):
         check("50h/SR.6 в " + path, False, "нет _clear_status_and_reset/50h/SR.6")
     else:
-        check("50h и SR.6 в " + path.split("/")[-1], True)
+        check("50h и SR.6 в " + path, True)
 
 
 # --- 20. Сверка с даташитами: буфер AMD, защита групп, E8h, bypass -----------
@@ -1476,8 +1500,10 @@ check("группа 3 защищена, остальные нет",
 
 section("Intel E8h: адрес БЛОКА (BA), а не 0 (28F320J5 / 28F128J3A / AP-646)")
 bad_src = []
-for path in ("windows/legacy/pcmcia_direct.py", "src/pcmcia_flash/nor_flash.py"):
-    src = (pathlib.Path(KIT) / path).read_text(encoding="utf-8")
+for path, src in (("pcmcia_direct", direct_source()),
+                  ("nor_flash.py", pathlib.Path(KIT, "src", "pcmcia_flash",
+                                                "nor_flash.py")
+                   .read_text(encoding="utf-8"))):
     if not ("INTEL_BUFFER_SETUP, local_block" in src
             and "INTEL_BUFFER_CONFIRM, local_block" in src
             and "local_block" in src.split("def _program_page_intel")[1]
@@ -1761,7 +1787,7 @@ import shutil as _sh                                                # noqa: E402
 import subprocess as _sp                                            # noqa: E402
 
 ver = D.KIT_VERSION
-direct = os.path.join(KIT, "windows", "legacy", "pcmcia_direct.py")
+direct = os.path.join(KIT, "pcmcia_direct.py")
 
 _run = _sp.run([sys.executable, "-B", direct, "--version"],
                capture_output=True, text=True)
@@ -1832,10 +1858,14 @@ check("tests/release.py: check_tree на рабочем дереве чист", 
       str(_probs[:3]))
 
 _rel_text = (pathlib.Path(KIT) / "tests" / "release.py").read_text(encoding="utf-8")
-check("tests/release.py: обязательный .bat - в windows/legacy, старого пути нет",
-      "windows/legacy/collect_pcmcia_info.bat" in _rel.REQUIRED
-      and "windows/collect_pcmcia_info.bat" not in _rel.REQUIRED
-      and '"windows/collect_pcmcia_info.bat"' not in _rel_text)
+# 2.18.0: монолит разложен по модулям, папки windows/legacy больше нет, поэтому
+# в обязательном составе - лаунчер и модули пакета, а путей в legacy нет вовсе.
+check("tests/release.py: в обязательном составе лаунчер и пакет, legacy нет",
+      "pcmcia_direct.py" in _rel.REQUIRED
+      and "src/pcmcia_direct/cli.py" in _rel.REQUIRED
+      and "src/pcmcia_direct/chips_data.py" in _rel.REQUIRED
+      and not [r for r in _rel.REQUIRED if r.startswith("windows/legacy")],
+      str([r for r in _rel.REQUIRED if "legacy" in r]))
 
 _run_rel = _sp.run([sys.executable, "-B", "tests/release.py"],
                    capture_output=True, text=True, cwd=KIT)
@@ -1845,7 +1875,7 @@ check("tests/release.py как программа: код 0 и «проверк�
 
 _fake = tempfile.mkdtemp(prefix="relkit-")
 try:
-    for rel, text in (("windows/legacy/pcmcia_direct.py",
+    for rel, text in (("src/pcmcia_direct/version.py",
                        'KIT_VERSION = "%s"\n' % ver),
                       ("collect_all.py",
                        "x = '(в переписке должна быть %s)'\n" % ver),

@@ -16,7 +16,7 @@
 * image       — операции с образом: проба, запись, чтение, журнал;
 * cli         — точка входа CLI (аргументы, отчёт, main).
 
-pcmcia_direct.py перемещён в windows/legacy/ (технический долг).
+pcmcia_direct.py переехал в пакет src/pcmcia_direct (2.18.0).
 Новый код живёт в этом пакете (src/pcmcia_flash/).
 """
 

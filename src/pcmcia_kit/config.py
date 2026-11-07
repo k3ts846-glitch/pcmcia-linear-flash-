@@ -28,7 +28,25 @@ REMOTE_DIR = "/tmp/pcmcia-ctl"
 # с «planb.py не найден».
 REMOTE_FILES = (
     "pcmcia_ctl.py",
-    "windows/legacy/pcmcia_direct.py",
+    # 2.18.0: монолит разложен по модулям, поэтому на ноутбук уезжает точка
+    # входа pcmcia_direct.py и весь пакет src/pcmcia_direct. Раньше здесь был
+    # один файл windows/legacy/pcmcia_direct.py — с 2.18.0 это лаунчер
+# pcmcia_direct.py и пакет src/pcmcia_direct.
+    "pcmcia_direct.py",
+    "src/pcmcia_direct/__init__.py",
+    "src/pcmcia_direct/__main__.py",
+    "src/pcmcia_direct/bridge.py",
+    "src/pcmcia_direct/chips.py",
+    "src/pcmcia_direct/chips_data.py",
+    "src/pcmcia_direct/cis.py",
+    "src/pcmcia_direct/cli.py",
+    "src/pcmcia_direct/errors.py",
+    "src/pcmcia_direct/flash.py",
+    "src/pcmcia_direct/image.py",
+    "src/pcmcia_direct/nor.py",
+    "src/pcmcia_direct/nor_commands.py",
+    "src/pcmcia_direct/power.py",
+    "src/pcmcia_direct/version.py",
     "collect_all.py",
     "run_remote.py",
     "remote_collect.py",
@@ -37,8 +55,8 @@ REMOTE_FILES = (
 
 # Без этих файлов пульт работать не должен: если их нет, распакован не тот
 # архив или указана не та папка.
-LOCAL_REQUIRED = ("pcmcia_ctl.py", "windows/legacy/pcmcia_direct.py", "collect_all.py",
-                  "run_remote.py")
+LOCAL_REQUIRED = ("pcmcia_ctl.py", "pcmcia_direct.py", "collect_all.py",
+                  "run_remote.py", "src/pcmcia_direct/cli.py")
 
 # Команды, которым нужен файл образа на этой машине.
 NEEDS_IMAGE = ("write", "verify", "fwwrite")
@@ -100,14 +118,15 @@ def kit_search_paths(explicit=""):
 
 
 def kit_dir(explicit=""):
-    """Папка набора: первая из путей поиска, где лежит windows/legacy/pcmcia_direct.py.
+    """Папка набора: первая из путей поиска, где лежит pcmcia_direct.py.
 
     Если такого нет, возвращается первый кандидат — чтобы сообщение об ошибке
     называло осмысленный путь, а не пустую строку.
     """
     candidates = kit_search_paths(explicit)
     for candidate in candidates:
-        if os.path.isfile(os.path.join(candidate, "windows", "legacy", "pcmcia_direct.py")):
+        if os.path.isfile(os.path.join(candidate, "pcmcia_direct.py")) \
+                or os.path.isdir(os.path.join(candidate, "src", "pcmcia_direct")):
             return candidate
     return candidates[0]
 

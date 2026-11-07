@@ -17,16 +17,54 @@ import subprocess
 import re
 
 KIT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Прежние сценарии (PowerShell и промежуточная версия на Python через .cmd) с
-# 2.16.0 лежат в windows/legacy и рабочим путём не считаются: пульт — это
-# пакет src/pcmcia_kit (проверки в tests/test_win.py). Их проверки оставлены,
-# чтобы запасной вариант оставался рабочим.
-LEGACY = os.path.join(KIT, "windows", "legacy")
+# С 2.18.0 код работы с картой — пакет src/pcmcia_direct, а точка входа
+# лежит в корне набора (pcmcia_direct.py). Монолита windows/legacy больше нет.
+DIRECT = os.path.join(KIT, "pcmcia_direct.py")
 
 
-def legacy(*parts):
-    """Путь к прежнему сценарию PowerShell."""
-    return os.path.join(LEGACY, *parts)
+class _Flat(object):
+    """Пакет pcmcia_direct с подменой имён «как в монолите».
+
+    До 2.18.0 эти проверки грузили один файл и подменяли имена прямо в нём
+    (d.Mem = ..., d._sysfs_mem = ...). Теперь имена живут в разных модулях
+    пакета, поэтому чтение идёт по всем модулям сразу, а присваивание
+    попадает в каждый модуль, где такое имя есть, — ровно туда, откуда его
+    возьмёт код.
+    """
+
+    def __init__(self, pkg):
+        object.__setattr__(self, "_pkg", pkg)
+        object.__setattr__(self, "_mods", [m for n, m in sys.modules.items()
+                                           if n == "pcmcia_direct"
+                                           or n.startswith("pcmcia_direct.")])
+
+    def __getattr__(self, name):
+        for mod in [self._pkg] + self._mods:
+            if hasattr(mod, name):
+                return getattr(mod, name)
+        raise AttributeError(name)
+
+    def __setattr__(self, name, value):
+        setattr(self._pkg, name, value)
+        for mod in self._mods:
+            if hasattr(mod, name):
+                setattr(mod, name, value)
+
+
+def direct_module():
+    """Свежий пакет src/pcmcia_direct на каждый вызов, как раньше монолит.
+
+    Модули удаляются из sys.modules: подмена, сделанная в одной проверке, не
+    должна переезжать в следующую (в монолите это получалось само собой).
+    """
+    import importlib
+    path = os.path.join(KIT, "src")
+    if path not in sys.path:
+        sys.path.insert(0, path)
+    for name in [n for n in list(sys.modules)
+                 if n == "pcmcia_direct" or n.startswith("pcmcia_direct.")]:
+        del sys.modules[name]
+    return _Flat(importlib.import_module("pcmcia_direct"))
 PASS, FAIL = [], []
 STUB = tempfile.mkdtemp(prefix="shtest-")
 NOEXEC_KIT = os.path.join(STUB, "kit_noexec")
@@ -403,7 +441,7 @@ def t_cis_step_present():
     rc, out, err = run("linux/pcmcia_flash.py", "--diag")
     txt = out + err
     check("вердикт --diag ведёт к --cis",
-          "windows/legacy/pcmcia_direct.py --cis" in txt, txt[-800:])
+          "pcmcia_direct.py --cis" in txt, txt[-800:])
     check("вывод --diag остаётся корректным UTF-8 (нет сырых \\xFF)",
           "\ufffd" not in txt and "\xff" not in txt, "сырой байт в выводе")
 
@@ -436,11 +474,8 @@ def t_diag_kernel_anonymous():
 
 def t_direct_read():
     print("\n[S18] pcmcia_direct.py: прямое чтение через /dev/mem (подставной файл)")
-    import importlib.util
-    path = os.path.join(KIT, "windows", "legacy", "pcmcia_direct.py")
-    spec = importlib.util.spec_from_file_location("pcmcia_direct", path)
-    d = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(d)
+    d = direct_module()
+    path = DIRECT
 
     # 1) окна: из текста lspci (файл) — только memory, без I/O
     wins_txt = os.path.join(STUB, "lspci_v.txt")
@@ -631,12 +666,17 @@ def t_ctl_menu():
     print("\n[S19c] pcmcia_ctl.py: пульт (чтение/запись/стирание/сверка) на заглушках")
     kit = os.path.join(STUB, "kit_ctl")
     os.makedirs(kit, exist_ok=True)
-    for f in ("pcmcia_ctl.py", "windows/legacy/pcmcia_direct.py", "collect_all.py"):
+    for f in ("pcmcia_ctl.py", "pcmcia_direct.py", "collect_all.py"):
         src = os.path.join(KIT, f)
         if os.path.exists(src):
             dest = os.path.join(kit, f)
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             shutil.copy(src, dest)
+    # 2.18.0: сам код работы с картой - пакет src/pcmcia_direct
+    pkg_src = os.path.join(KIT, "src", "pcmcia_direct")
+    if os.path.isdir(pkg_src):
+        shutil.copytree(pkg_src, os.path.join(kit, "src", "pcmcia_direct"),
+                        dirs_exist_ok=True)
     ctl = os.path.join(kit, "pcmcia_ctl.py")
     card = os.path.join(STUB, "ctl_card.bin")
     with open(card, "wb") as f:
@@ -791,11 +831,8 @@ def t_ctl_menu():
 def t_direct_sysfs_fallback():
     print("\n[S19b] STRICT_DEVMEM: когда /dev/mem не отдал страницу, "
           "читается тот же адрес через файл BAR")
-    import importlib.util
-    path = os.path.join(KIT, "windows", "legacy", "pcmcia_direct.py")
-    spec = importlib.util.spec_from_file_location("pcmcia_direct_sf", path)
-    d = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(d)
+    d = direct_module()
+    path = DIRECT
 
     PCI1, PCI2 = 0x64000000, 0x68000000
     SIZE = 1 << 20
@@ -926,11 +963,8 @@ def t_direct_sysfs_fallback():
 
 def t_direct_cis():
     print("\n[S19] pcmcia_direct.py: CIS через attribute memory (паспорт карты)")
-    import importlib.util
-    path = os.path.join(KIT, "windows", "legacy", "pcmcia_direct.py")
-    spec = importlib.util.spec_from_file_location("pcmcia_direct_cis", path)
-    d = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(d)
+    d = direct_module()
+    path = DIRECT
 
     def tpl(code, body):
         return bytes([code, len(body)]) + body
@@ -1277,7 +1311,7 @@ def t_syntax_all() -> None:
         "linux/flashcard.py",
         "linux/pcmcia_flash.py",
         "linux/setup_linear_flash.py",
-        "windows/legacy/pcmcia_direct.py",
+        "pcmcia_direct.py",
         "pcmcia_ctl.py",
         "collect_all.py",
         "remote_collect.py",
@@ -1287,7 +1321,7 @@ def t_syntax_all() -> None:
         "gui.py",
         "make_cpio.py",
         "planb.py",
-        "windows/card_dump_linux.py",
+        "linux/card_dump_linux.py",
     ]
     for rel in py_files:
         path = os.path.join(KIT, rel)

@@ -9,8 +9,8 @@
 из неё выпали windows/, debs/ и demo/ — архив собрался «успешно», но неполным.
 Здесь состав архива описан явно и проверяется ДО упаковки:
 
-  * версия одна на все файлы (KIT_VERSION, RUN.ps1, collect_all.py,
-    remote_collect.ps1);
+  * версия одна на все файлы (KIT_VERSION, _version.py пакетов, collect_all.py,
+    remote_collect.py);
   * в исходниках нет __pycache__ и временных файлов;
   * for-windows/ в ZIP - точная копия корня набора (иначе на ноутбук
     уезжает старый код);
@@ -37,7 +37,16 @@ MD5_PATH = "/home/user/MD5_АРХИВА.txt"
 
 # Что обязательно должно попасть в ZIP: без этого набор неполон.
 REQUIRED = [
-    "windows/legacy/pcmcia_direct.py", "pcmcia_ctl.py", "collect_all.py", "run_remote.py",
+    # С 2.18.0 монолита нет: pcmcia_direct.py - точка входа, код в пакете
+    # src/pcmcia_direct (12 модулей). Папки windows/legacy/ в наборе больше нет.
+    "pcmcia_direct.py", "pcmcia_ctl.py", "collect_all.py", "run_remote.py",
+    "src/pcmcia_direct/__init__.py", "src/pcmcia_direct/cli.py",
+    "src/pcmcia_direct/flash.py", "src/pcmcia_direct/nor.py",
+    "src/pcmcia_direct/bridge.py", "src/pcmcia_direct/cis.py",
+    "src/pcmcia_direct/power.py", "src/pcmcia_direct/image.py",
+    "src/pcmcia_direct/chips.py", "src/pcmcia_direct/chips_data.py",
+    "src/pcmcia_direct/nor_commands.py", "src/pcmcia_direct/errors.py",
+    "src/pcmcia_direct/version.py",
     "remote_collect.py",
     # Технический долг (ещё не перенесены на Python):
     "linux/pcmcia_flash.py", "pcmcia_gui.py", "gui.py",
@@ -51,9 +60,6 @@ REQUIRED = [
     "tests/test_scripts.py", "tests/nor_model.py", "tests/test_v2.py",
     "tests/test_gui.py", "tests/test_ui_pro.py", "tests/test_win.py",
     "tests/test_legacy.py",
-    # .bat вне windows/legacy в наборе нет с 2.16.0 (Windows-часть на Python);
-    # диагностический сценарий переехал в windows/legacy вместе с остальным.
-    "windows/legacy/collect_pcmcia_info.bat",
     "demo/01_карта.png",
 ]
 
@@ -89,7 +95,8 @@ def kit_version():
     Совпадать с ней обязаны: src/pcmcia_kit/_version.py, src/pcmcia_flash/
     _version.py (у пакетов своя запись) и подсказка в collect_all.py.
     pyproject.toml версию не хранит, а берёт из пакета (attr)."""
-    text = open(os.path.join(KIT, "windows", "legacy", "pcmcia_direct.py"), encoding="utf-8").read()
+    text = open(os.path.join(KIT, "src", "pcmcia_direct", "version.py"),
+                encoding="utf-8").read()
     m = re.search(r'^KIT_VERSION = "([^"]+)"', text, re.M)
     return m.group(1) if m else None
 
@@ -143,7 +150,7 @@ def check_tree():
     problems = []
     ver = kit_version()
     if not ver:
-        problems.append("KIT_VERSION не найден в windows/legacy/pcmcia_direct.py")
+        problems.append("KIT_VERSION не найден в src/pcmcia_direct/version.py")
         return problems
 
     # 1. одна версия на все файлы, где она упоминается
@@ -283,7 +290,7 @@ def verify_tar():
     with tarfile.open(TAR_PATH) as tf:
         names = tf.getnames()
     for rel in ("debs/INSTALL_OFFLINE.txt",
-                "windows/legacy/collect_pcmcia_info.bat",
+                "pcmcia_direct.py", "src/pcmcia_direct/cli.py",
                 "demo/01_карта.png", "tests/test_scripts.py", "tests/test_win.py",
                 "src/pcmcia_kit/cli.py", "pyproject.toml", "pcmcia-kit.pyw",
                 "PCMCIA_LINEAR_FLASH_СПРАВОЧНИК.md", "README.md"):
@@ -359,7 +366,7 @@ def main():
     export()
     zip_md5 = build_zip()
     tar_md5 = build_tar()
-    direct_md5 = md5(os.path.join(KIT, "windows", "legacy", "pcmcia_direct.py"))
+    direct_md5 = md5(os.path.join(KIT, "pcmcia_direct.py"))
     full_count = write_full_sums()
     problems = verify_zip() + verify_tar()
 
@@ -377,7 +384,7 @@ def main():
 
 {zip_md5}  pcmcia-ssh-kit.zip
 {tar_md5}  pcmcia-flash-kit.tar.gz
-{direct_md5}  windows/legacy/pcmcia_direct.py  (внутри набора)
+{direct_md5}  pcmcia_direct.py  (точка входа; код в src/pcmcia_direct/)
 
 Что в {ver} (коротко):
   * справочник PCMCIA_LINEAR_FLASH_СПРАВОЧНИК.md: что за карты бывают, как
@@ -398,7 +405,10 @@ def main():
     ни .cmd, ни PowerShell в рабочем пути нет;
   * графический пульт (окно с кнопками и журналом) и текстовое меню;
   * оформительный минимум: pyproject.toml, console-скрипт pcmcia-kit,
-    проверка стиля ruff; старые сценарии - в windows/legacy/ (не используются);
+    проверка стиля ruff;
+  * монолит на 6709 строк разложен по модулям src/pcmcia_direct (мост и
+    /dev/mem, CIS, питание, образ, таблицы чипов, команды NOR, сценарии,
+    командная строка); windows/legacy/ удалён, точка входа - pcmcia_direct.py;
   * тесты ускорены: около 32 с полный прогон и около 17 с быстрый
     (tests/test_scripts.py --fast);
   * сборка выпуска одним действием: python3 tests/release.py --build

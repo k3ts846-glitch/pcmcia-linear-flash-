@@ -19,9 +19,9 @@
 pcmcia_direct.py (GEOMETRY) - то есть проверяется ровно то, что уедет на
 ноутбук, а не отдельная копия таблицы.
 """
-import importlib.util
 import os
 import pathlib
+import sys
 
 MIB = 1 << 20
 CHIP = 2 * MIB          # Am29F016 = 16 Мбит = 2 МиБ
@@ -29,11 +29,17 @@ SECTOR = 64 * 1024
 
 
 def load_direct(kit):
-    path = os.path.join(kit, "windows", "legacy", "pcmcia_direct.py")
-    spec = importlib.util.spec_from_file_location("pcmcia_direct_model", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """Модуль работы с картой.
+
+    С 2.18.0 это пакет src/pcmcia_direct (монолит windows/legacy/pcmcia_direct.py
+    разложен по модулям), а не отдельный файл. Плоский API сохранён, поэтому
+    весь код ниже работает с ним как раньше.
+    """
+    src = os.path.join(kit, "src")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    import pcmcia_direct
+    return pcmcia_direct
 
 
 class ModelCardIO:

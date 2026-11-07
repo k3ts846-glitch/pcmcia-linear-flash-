@@ -166,7 +166,7 @@ LAST_RC = ""
 # Поиск набора                                                                 #
 # --------------------------------------------------------------------------- #
 def find_kit(explicit: str | None) -> Path | None:
-    """Найти папку набора (там лежит windows/legacy/pcmcia_direct.py)."""
+    """Найти папку набора (там лежит pcmcia_direct.py)."""
     candidates = []
     if explicit:
         candidates.append(Path(explicit))
@@ -189,7 +189,7 @@ def find_kit(explicit: str | None) -> Path | None:
     candidates.append(Path("/mnt/pcmcia-flash-kit"))
 
     for c in candidates:
-        if c.is_dir() and (c / "windows" / "legacy" / "pcmcia_direct.py").is_file():
+        if c.is_dir() and (c / "pcmcia_direct.py").is_file():
             return c
     return None
 
@@ -222,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
 
     kit = find_kit(args.kit or None)
     if kit is None:
-        print("ОШИБКА: не нашёл набор (windows/legacy/pcmcia_direct.py). Укажите путь:")
+        print("ОШИБКА: не нашёл набор (pcmcia_direct.py в корне). Укажите путь:")
         print("  python3 collect_all.py --kit /media/<флешка>/pcmcia-flash-kit")
         return 2
 
@@ -276,10 +276,11 @@ def main(argv: list[str] | None = None) -> int:
     except OSError:
         say("  cmdline:     -")
 
-    pcmcia_direct = kit / "windows" / "legacy" / "pcmcia_direct.py"
+    pcmcia_direct = kit / "pcmcia_direct.py"
+    version_py = kit / "src" / "pcmcia_direct" / "version.py"
     kit_version = "?"
     try:
-        for line in pcmcia_direct.read_text(encoding="utf-8").splitlines():
+        for line in version_py.read_text(encoding="utf-8").splitlines():
             if line.startswith("KIT_VERSION"):
                 # отрезать хвостовой комментарий, иначе версия уедет
                 # вместе с ним (было до 2.17.16).
@@ -287,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
                 break
     except OSError:
         pass
-    say(f"  версия набора: {kit_version}   (в переписке должна быть 2.17.27)")
+    say(f"  версия набора: {kit_version}   (в переписке должна быть 2.18.0)")
     try:
         md5_direct = subprocess.run(
             ["md5sum", str(pcmcia_direct)], capture_output=True, text=True
@@ -297,7 +298,9 @@ def main(argv: list[str] | None = None) -> int:
         say("  md5 pcmcia_direct.py: -")
 
     say("  Файлы набора (md5 — сверить с ответом в переписке):")
-    md5_files = ["windows/legacy/pcmcia_direct.py", "pcmcia_ctl.py", "collect_all.py",
+    md5_files = ["pcmcia_direct.py", "src/pcmcia_direct/cli.py",
+                 "src/pcmcia_direct/flash.py", "src/pcmcia_direct/chips_data.py",
+                 "pcmcia_ctl.py", "collect_all.py",
                  "run_remote.py", "remote_collect.py"]
     existing = [f for f in md5_files if (kit / f).is_file()]
     if existing:
@@ -312,7 +315,8 @@ def main(argv: list[str] | None = None) -> int:
             pass
 
     say("  Чего не хватает в наборе:")
-    for f in ("windows/legacy/pcmcia_direct.py", "pcmcia_ctl.py", "collect_all.py"):
+    for f in ("pcmcia_direct.py", "src/pcmcia_direct/cli.py", "pcmcia_ctl.py",
+              "collect_all.py"):
         if not (kit / f).is_file():
             say(f"    НЕТ: {f}")
 
@@ -360,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
         say("         Перезагрузка НЕ включит iomem=relaxed. Запустите planb.sh 2.6.3+")
     else:
         say("  ВЫВОД: план Б НЕ применён (или применён старой версией набора).")
-        say("         С Windows: .\\RUN.ps1 -HostName <адрес> -PlanB")
+        say("         С Windows: python run_remote.py --planb --host <адрес>")
 
     try:
         uptime = Path("/proc/uptime").read_text(encoding="utf-8").split()[0]

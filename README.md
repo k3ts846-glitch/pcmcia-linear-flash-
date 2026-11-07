@@ -5,6 +5,8 @@
 ноутбуке с Linux; пульт соединяется с ним по ssh и ничего там не устанавливает.
 
 * Ни одного сценария PowerShell и ни одного `.cmd`: всё на Python 3.
+* Код работы с картой — пакет `src/pcmcia_direct` (12 модулей); точка входа
+  одна: `pcmcia_direct.py` в корне набора.
 * На ноутбук уходят только изменившиеся файлы набора.
 * Запись выполняется командами микросхемы через окно моста, без драйверов.
 * Понимает разные микросхемы: сектор 16/64/128 КиБ, команды байтом и словом,
@@ -73,8 +75,19 @@ src/pcmcia_kit/           пульт (пакет)
     keyring.py            вход по ключу
     gui.py                графический пульт
     commands/             по модулю на команду
-pcmcia_direct.py          работа с картой на ноутбуке (окна, CIS, JEDEC)
-pcmcia_ctl.sh             действия на ноутбуке (info, read, write, erase...)
+pcmcia_direct.py          точка входа: работа с картой на ноутбуке
+src/pcmcia_direct/        её код (пакет, 14 модулей вместо монолита 6709 строк)
+    bridge.py             окна CardBus через sysfs, /dev/mem, mmap, чтение памяти
+    cis.py                паспорт карты (CIS): цепочки, отчёт, размеры
+    power.py              питание сокета и Vpp: EXCA, PCI-конфигурация, TPS2220B
+    image.py              образ карты: чтение, размер, обрезка, сводка
+    chips_data.py         таблицы микросхем со ссылками на даташиты
+    chips.py              имена, JEDEC/CFI-определение, карта секторов
+    nor_commands.py       коды команд NOR: JEDEC/AMD, Intel CUI, статус
+    nor.py                команды микросхемы на модели шины (чтение/запись/стирание)
+    flash.py              сценарии: проба, чтение, запись, стирание, журнал
+    cli.py                командная строка (--probe, --cis, --read, --flash...)
+pcmcia_ctl.py             действия на ноутбуке (info, read, write, erase...)
 tests/                    проверки: test_scripts.py, test_win.py, test_gui...
 PCMCIA_LINEAR_FLASH_СПРАВОЧНИК.md   справочник по картам
 ИНСТРУКЦИЯ.md             инструкция по шагам
@@ -222,6 +235,56 @@ Sequence»: 555h/AAh, 2AAh/55h, 555h/80h, 555h/AAh, 2AAh/55h, **SA/30h**), с
 * **AT29C010/020/040/512** честно помечены как неподдерживаемые: у этого
   семейства нет команды `Sector Erase 30h` (страница стирается сама при
   записи), поэтому стирать их нашим циклом нельзя.
+
+**Что нового в 2.18.0 — монолит разложен по модулям, папки `windows/legacy` больше нет.**
+
+Файл `windows/legacy/pcmcia_direct.py` на 6709 строк (233 имени верхнего уровня:
+окна моста и `/dev/mem`, CIS, питание сокета, образ, таблицы микросхем, команды
+NOR, сценарии записи, командная строка) разложен по 12 модулям пакета
+`src/pcmcia_direct`; в корне остался тонкий лаунчер `pcmcia_direct.py` — он
+находит `src`, подключает пакет и передаёт ему аргументы. Команды не изменились:
+
+```
+python3 pcmcia_direct.py --version
+python3 pcmcia_direct.py --probe --cis --windows lspci.txt
+python3 pcmcia_direct.py --read card.bin --size auto
+```
+
+Что от этого изменилось по существу:
+
+* **папки `windows/` нет вовсе.** Вместе с монолитом удалены `.ps1`/`.cmd`
+  сценарии 2.16.0, которые лежали там «на один выпуск» и не запускались, и
+  `windows/card_dump_linux.py` переехал в `linux/`. Набор — это `.py`: ни
+  PowerShell, ни `.cmd` для запуска не нужны ни на одной машине;
+* **пульт возит пакет, а не файл.** `src/pcmcia_kit/config.py` синхронизирует
+  на ноутбук лаунчер и все 14 файлов `src/pcmcia_direct/*`, а `remote_collect.py`
+  копирует пакет в собранную на ноутбуке папку (`shutil.copytree`) — раньше
+  уезжал один монолит, и после разбиения на ноутбуке не хватило бы модулей;
+* **одна версия на всё.** `KIT_VERSION` живёт в `src/pcmcia_direct/version.py`,
+  его читают `collect_all.py`, `pcmcia_ctl.py`, `linux/pcmcia_flash.py` и пульт;
+  `tests/release.py` требует лаунчер и 13 модулей пакета (и уже не требует
+  `windows/legacy/*`);
+* **таблицы микросхем остались одним источником истины.** `chips_data.py` — это
+  прежние таблицы монолита без единой правки, а тест по-прежнему сверяет их с
+  `src/pcmcia_flash/data/chips.json` по общим именам: 116 строк в таблице
+  набора, 99 в базе пакета, расхождение — те же 17 имён, что и до разбиения;
+* **разбиение нашло спрятанную ошибку.** `chips._autodetect_intel` создаёт
+  второй объект шины (`NorFlash` словом) — и после разбиения имя осталось без
+  импорта, потому что `NorFlash` живёт в `nor.py`, а `nor.py` сам берёт имена из
+  `chips.py`. Ленивый импорт внутри функции (как уже было в `_autodetect_cfi`)
+  вернул работоспособность; нашлось это проверкой `ruff` на неопределённые имена
+  (F821), а тестом теперь закрыто вызовом функции;
+* **проверки переехали вместе с кодом.** `tests/test_scripts.py` загружает
+  пакет и подменяет имена в том модуле, где они живут (обёртка `_Flat`);
+  `tests/test_flash_regressions.py` читает исходники всех модулей;
+  `tests/test_legacy.py` теперь проверяет саму раскладку: папки нет, лаунчер
+  тонкий, у каждого модуля есть описание, `python3 -m pcmcia_direct` работает.
+
+Тесты: `test_flash_regressions` 247, `test_scripts` 231, `test_win` 115,
+`test_legacy` 23 (было 17 — добавились 6 проверок раскладки);
+`tests/release.py` — «версия 2.18.0». Документация (README, `ИНСТРУКЦИЯ.md`,
+`README_FIRST.txt`, `00_READ_ME_RU.txt`, `ЧТО_НУЖНО_НА_WINDOWS.txt`) больше не
+отправляет к удалённым сценариям.
 
 **Что нового в 2.17.27 — NAND не NOR: три строки Samsung молча получали карту секторов.**
 
@@ -467,7 +530,7 @@ OSError: [Errno 26] Text file busy: '/tmp/uipro-xju3hpm6/pccardctl'
 `ПУСК.cmd`. Все три начинались одинаково:
 
 ```
-python windows/legacy/pcmcia_win.py --help
+python src/pcmcia_direct/pcmcia_win.py --help
 ModuleNotFoundError: No module named 'kitlib'
 ```
 
@@ -480,8 +543,8 @@ kitlib` пуст) — файлы перенесены из другого про
 |---|---|---|
 | `pcmcia_win.py`, `add_key.py`, `ПУСК.cmd` | запуском: `ModuleNotFoundError` | удалены; описание папки прямо говорит, почему |
 | `README_УСТАРЕЛО.txt`: «Проверяется набором tests/test_legacy.py» | такого файла нет | `tests/test_legacy.py` создан: 16 проверок |
-| подсказка при отказе ssh: `python pcmcia_win.py -User имя`, `python add_key.py -HostName` | обе программы не запускаются | `python -m pcmcia_kit info --user имя --host <адрес>`, `python -m pcmcia_kit key --host <адрес>` — работающие команды |
-| текст выпуска в `tests/release.py`: «Windows: ПУСК.cmd — двойной щелчок… (kit_sync.ps1), (kit_state.ps1)» | через три выпуска после перехода на Python | «двойной щелчок по pcmcia-kit.pyw» |
+| подсказка при отказе ssh: `python pcmcia_win.py --user имя`, `python add_key.py --host` | обе программы не запускаются | `python -m pcmcia_kit info --user имя --host <адрес>`, `python -m pcmcia_kit key --host <адрес>` — работающие команды |
+| текст выпуска в `tests/release.py`: «Windows: ПУСК.cmd — двойной щелчок… (src/pcmcia_kit/sync.py), (src/pcmcia_kit/state.py)» | через три выпуска после перехода на Python | «двойной щелчок по pcmcia-kit.pyw» |
 | `transport.python_hint()` | не вызывается ниоткуда, описание ссылалось на `ПУСК.cmd` | удалена |
 
 Новый `tests/test_legacy.py` проверяет не «файлы на месте», а то, что не
@@ -567,15 +630,15 @@ kitlib` пуст) — файлы перенесены из другого про
 
 | Что было | Как проверено | Стало |
 |---|---|---|
-| `pcmcia_direct.py --version` → `error: unrecognized arguments`, код 2, хотя комментарий у `KIT_VERSION` обещал печать версии «в отчёте и в `--selftest`» | `python3 windows/legacy/pcmcia_direct.py --version` | `pcmcia_direct.py 2.17.16 (набор pcmcia-linear-flash)`, код 0; тот же ключ у пакетного двойника `pcmcia_flash` |
+| `pcmcia_direct.py --version` → `error: unrecognized arguments`, код 2, хотя комментарий у `KIT_VERSION` обещал печать версии «в отчёте и в `--selftest`» | `python3 pcmcia_direct.py --version` | `pcmcia_direct.py 2.17.16 (набор pcmcia-linear-flash)`, код 0; тот же ключ у пакетного двойника `pcmcia_flash` |
 | в отчёте о карте версии не было, хотя отчёт просят присылать вместе с выводом | отчёт перед записью | первая строка: `версия набора         : 2.17.16` (обе реализации) |
-| пять мест читали `KIT_VERSION` строкой целиком **вместе с хвостовым комментарием** | `pcmcia_kit.cli.kit_version('.')` возвращал `'2.17.16"          # версия набора: ...'` | комментарий отрезается: `collect_all.py`, `pcmcia_ctl.py`, `linux/pcmcia_flash.py`, `src/pcmcia_kit/cli.py`, `windows/legacy/pcmcia_win.py` |
+| пять мест читали `KIT_VERSION` строкой целиком **вместе с хвостовым комментарием** | `pcmcia_kit.cli.kit_version('.')` возвращал `'2.17.16"          # версия набора: ...'` | комментарий отрезается: `collect_all.py`, `pcmcia_ctl.py`, `linux/pcmcia_flash.py`, `src/pcmcia_kit/cli.py`, `src/pcmcia_direct/pcmcia_win.py` |
 | `tests/release.py` не мог пройти никогда: 11 замечаний на чистом дереве | `python3 tests/release.py` | `версия 2.17.16: проверки до сборки пройдены`, код 0 |
 
 Три причины «вечной красноты» `release.py`:
 
 * `package_version()` искала `__version__` в `src/pcmcia_kit/__init__.py`, а там литерала нет (`from ._version import __version__`) — теперь читаются `_version.py` **обоих** пакетов, и расхождение любой из версий с `KIT_VERSION` валит проверку;
-* `REQUIRED` требовал `windows/collect_pcmcia_info.bat`: в 2.16.0 сценарий переехал в `windows/legacy/` (там он и лежит) — путь исправлен и в списке, и в проверке tar.gz; заодно исправлен `README_FIRST.txt`, где был указан старый путь;
+* `REQUIRED` требовал `windows/collect_all.py`: в 2.16.0 сценарий переехал в `src/pcmcia_direct/` (там он и лежит) — путь исправлен и в списке, и в проверке tar.gz; заодно исправлен `README_FIRST.txt`, где был указан старый путь;
 * `check_tree()` считала дефектом `__pycache__`, `.pytest_cache`, `.card-state.txt`, `.DS_Store` — то есть ровно то, что `clean_junk()` сама убирает при сборке. Теперь кэш — не дефект, а остатки правок (`.orig`, `.rej`, `.bak`, `~`) — дефект; в `.git` проверка не заходит.
 
 `tests/release.py` добавлен в CI отдельным шагом, чтобы снова не сгнил.

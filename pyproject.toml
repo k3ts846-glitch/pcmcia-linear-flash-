@@ -67,7 +67,6 @@ source = ["src"]
 omit = [
     "*/tests/*",
     "*/__pycache__/*",
-    "*/legacy/*",
 ]
 
 [tool.coverage.report]

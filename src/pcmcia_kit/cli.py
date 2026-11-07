@@ -140,8 +140,12 @@ def resolve_key(explicit):
 
 
 def kit_version(directory):
-    """Версия набора из pcmcia_direct.py: по ней видно, тот ли архив распакован."""
-    path = os.path.join(directory, "windows", "legacy", "pcmcia_direct.py")
+    """Версия набора из пакета: по ней видно, тот ли архив распакован.
+
+    С 2.18.0 версия лежит в src/pcmcia_direct/version.py (KIT_VERSION);
+    лаунчер pcmcia_direct.py в корне её только импортирует.
+    """
+    path = os.path.join(directory, "src", "pcmcia_direct", "version.py")
     try:
         with open(path, encoding="utf-8") as handle:
             for line in handle:
