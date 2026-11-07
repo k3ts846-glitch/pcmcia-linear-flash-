@@ -50,6 +50,7 @@ REQUIRED = [
     "PCMCIA_LINEAR_FLASH_СПРАВОЧНИК.md",
     "tests/test_scripts.py", "tests/nor_model.py", "tests/test_v2.py",
     "tests/test_gui.py", "tests/test_ui_pro.py", "tests/test_win.py",
+    "tests/test_legacy.py",
     # .bat вне windows/legacy в наборе нет с 2.16.0 (Windows-часть на Python);
     # диагностический сценарий переехал в windows/legacy вместе с остальным.
     "windows/legacy/collect_pcmcia_info.bat",
@@ -389,9 +390,9 @@ def main():
     чип); при отказе называется первый несошедшийся байт страницы;
   * паспорт разбирается подробнее: 17h/19h/1E/40h/45h/46h, тип носителя
     (флеш, SRAM, ROM), батарея, размер, защита от записи;
-  * Windows: ПУСК.cmd - двойной щелчок и меню; пункт 12 - проверка набора;
-    на ноутбук уходят только изменившиеся файлы (kit_sync.ps1);
-    шапка меню помнит последний опрос карты (kit_state.ps1);
+  * Windows: двойной щелчок по pcmcia-kit.pyw и меню; пункт 12 - проверка
+    набора; на ноутбук уходят только изменившиеся файлы; шапка меню
+    помнит последний опрос карты;
   * Windows-часть переведена на Python целиком: пакет src/pcmcia_kit,
     запуск python -m pcmcia_kit или двойной щелчок по pcmcia-kit.pyw;
     ни .cmd, ни PowerShell в рабочем пути нет;

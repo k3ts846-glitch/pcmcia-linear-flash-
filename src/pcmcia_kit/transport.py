@@ -233,8 +233,8 @@ def explain(text):
         console.say("  ВХОД НЕ ВЫПОЛНЕН: неверный пароль или вход запрещён.")
         console.say("  1) проверьте раскладку и Caps Lock;")
         console.say("  2) вход root: на ноутбуке  grep -i permitrootlogin /etc/ssh/sshd_config")
-        console.say("  3) свой пользователь: python pcmcia_win.py -User имя (нужен sudo);")
-        console.say("  4) без пароля вообще: python add_key.py -HostName <адрес>")
+        console.say("  3) свой пользователь: python -m pcmcia_kit info --user имя --host <адрес>")
+        console.say("  4) без пароля вообще: python -m pcmcia_kit key --host <адрес>")
         console.say("  Ничего не изменено: файлы не копировались, на карту не писали.")
         return True
     if any(word in text for word in ("Connection refused", "No route to host",
@@ -255,13 +255,6 @@ def explain(text):
 def quote_for_remote(text):
     """Заключить строку в кавычки для удалённой оболочки."""
     return shlex.quote(text)
-
-
-def python_hint():
-    """Подсказка, если Python не найден (используется в ПУСК.cmd)."""
-    return ("Python 3 не найден. Установите его: https://www.python.org/downloads/ "
-            "(при установке отметьте «Add python.exe to PATH») "
-            "или из Microsoft Store: Python 3.12. После установки запустите снова.")
 
 
 if __name__ == "__main__":       # pragma: no cover - ручная проверка
