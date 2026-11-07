@@ -36,7 +36,8 @@
   debs/                           70 .deb для bookworm i386 + ВСЕ библиотеки (офлайн),
                                   включая python3-tk для GUI
                                   см. debs/INSTALL_OFFLINE.txt
-  windows/collect_pcmcia_info.bat диагностика (если понадобится посмотреть из Windows)
+  windows/legacy/collect_pcmcia_info.bat диагностика из Windows (лежит
+                                  вместе с прочими прежними сценариями)
   windows/card_dump.linux.sh      снять образ, пока карта стоит в Windows-ноутбуке
   make_cpio.sh                    упаковать набор в cpio.gz (для initrd, по желанию)
   README_FIRST.txt                этот файл (кратко)

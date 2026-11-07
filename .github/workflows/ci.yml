@@ -32,6 +32,13 @@ jobs:
         continue-on-error: true
         run: ruff check src/ tests/ *.py --output-format=concise
 
+      # Состав выпуска: одна версия во всех местах, обязательные файлы на
+      # месте, нет следов правок. До 2.17.16 этот скрипт не мог пройти на
+      # чистом дереве (искал версию не там, требовал переехавший .bat и
+      # считал дефектом кэш Python), поэтому в CI его не ставили.
+      - name: Проверка состава выпуска
+        run: python tests/release.py
+
   test:
     runs-on: ubuntu-latest
     strategy:
